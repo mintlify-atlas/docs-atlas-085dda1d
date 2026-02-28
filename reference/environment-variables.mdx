@@ -1,0 +1,344 @@
+---
+title: Environment variables
+description: Complete reference for all environment variables used in OOOC Fête Finder
+---
+
+OOOC Fête Finder uses environment variables for runtime configuration, authentication, integrations, and deployment settings. All variables are validated using the schema defined in `lib/config/env.ts`.
+
+## Core variables
+
+<ParamField path="NODE_ENV" type="string" default="development">
+  Runtime environment mode.
+  
+  **Valid values:** `development`, `production`, `test`
+  
+  **Required:** No (optional with default)
+</ParamField>
+
+<ParamField path="AUTH_SECRET" type="string" required>
+  Secret key used for JWT signing, cookie encryption, and hashed security keys.
+  
+  **Minimum length:** 32 characters
+  
+  **Generation:**
+  ```bash
+  openssl rand -base64 48
+  ```
+  
+  <Warning>
+    This variable is required in all environments. The application will fail to start without it.
+  </Warning>
+</ParamField>
+
+<ParamField path="DATA_MODE" type="string" default="remote">
+  Determines the primary data source for live event reads.
+  
+  **Valid values:**
+  - `remote` - Use Postgres event store with local CSV fallback
+  - `local` - Use local CSV file only (`data/events.csv`)
+  - `test` - Use in-memory test data
+  
+  <Warning>
+    In Vercel `preview` or `production` environments, `DATA_MODE` is **required**. Missing this variable will trigger a startup failure.
+  </Warning>
+  
+  See [Data modes](/reference/data-modes) for complete behavior documentation.
+</ParamField>
+
+## Admin authentication
+
+<ParamField path="ADMIN_KEY" type="string" default="">
+  Master key for admin authentication. If empty or unset, all admin login and admin API routes are disabled.
+  
+  **Generation:**
+  ```bash
+  openssl rand -hex 24
+  ```
+  
+  <Info>
+    Setting this to an empty string effectively disables the admin panel without code changes.
+  </Info>
+</ParamField>
+
+<ParamField path="ADMIN_RESET_PASSCODE" type="string">
+  Optional secondary passcode required for destructive admin actions like factory reset.
+  
+  **Recommendation:** Keep this different from `ADMIN_KEY`.
+  
+  **Generation:**
+  ```bash
+  openssl rand -hex 32
+  ```
+</ParamField>
+
+<ParamField path="ADMIN_NOTIFICATION_CACHE_SECONDS" type="number" default="15">
+  Cache TTL in seconds for admin header notification badge counters.
+  
+  Set to `0` to disable caching and force real-time counts on every request.
+</ParamField>
+
+## Database
+
+<ParamField path="DATABASE_URL" type="string">
+  Postgres connection string (includes user, password, host, port, and database name).
+  
+  **Example:**
+  ```
+  postgresql://user:pass@host:5432/dbname?sslmode=require
+  ```
+  
+  **Required for:** Postgres-backed runtime behavior with `DATA_MODE=remote`
+  
+  <Note>
+    Neon and Vercel may set additional Postgres environment variables (`PGHOST`, `POSTGRES_*`, etc.). The application only reads `DATABASE_URL`.
+  </Note>
+</ParamField>
+
+<ParamField path="POSTGRES_POOL_MAX" type="number">
+  Optional override for maximum database connection pool size.
+  
+  **Default values:**
+  - Development: 1
+  - Production: 3
+  
+  **Bounds:** Between 1 and 10
+</ParamField>
+
+## Public client variables
+
+These variables are prefixed with `NEXT_PUBLIC_` and are exposed to the client-side JavaScript bundle.
+
+<ParamField path="NEXT_PUBLIC_SITE_URL" type="string" default="http://localhost:3000">
+  Canonical site origin used for absolute URL generation and OG metadata.
+  
+  **Example:** `https://fete.outofofficecollective.co.uk`
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_BASE_PATH" type="string" default="">
+  Optional subpath for deployments not hosted at the domain root.
+  
+  **Example:** `/fete` for `https://example.com/fete`
+</ParamField>
+
+## Google integrations
+
+<ParamField path="GOOGLE_MAPS_API_KEY" type="string">
+  API key for Google Maps Geocoding API. Enables precise coordinate lookup for event addresses.
+  
+  **When unset:** Arrondissement center fallback coordinates are used.
+  
+  **Setup:** Enable Geocoding API in Google Cloud Console.
+  
+  See [Geocoding integration](/integrations/geocoding) for complete behavior.
+</ParamField>
+
+<ParamField path="GOOGLE_SHEET_ID" type="string">
+  Google Sheet ID for admin backup import and preview.
+  
+  **Used for:** Service account-based sheet access (not live runtime source).
+  
+  <Info>
+    Google Sheets is **not** the live runtime source. It is only used in admin for backup preview/import operations.
+  </Info>
+</ParamField>
+
+<ParamField path="GOOGLE_SERVICE_ACCOUNT_KEY" type="string">
+  Service account credentials in JSON format (one-line compact, no file-path fallback).
+  
+  **Required for:** Admin Google Sheet import and preview when using `GOOGLE_SHEET_ID`.
+  
+  <Warning>
+    Store this as a single-line JSON string, not as a file path.
+  </Warning>
+</ParamField>
+
+<ParamField path="REMOTE_CSV_URL" type="string">
+  Alternative to Google Sheets API for admin backup source. Direct URL to a published CSV file.
+  
+  **Example:** Google Sheets "Publish to web" CSV URL
+  
+  <Note>
+    This is used as an alternative to `GOOGLE_SHEET_ID` for admin import/preview only.
+  </Note>
+</ParamField>
+
+## Security and rate limiting
+
+<ParamField path="CRON_SECRET" type="string">
+  Bearer token used to protect scheduled cron endpoints.
+  
+  **Protected routes:**
+  - `/api/cron/cleanup-admin-sessions`
+  - `/api/cron/cleanup-rate-limits`
+  - `/api/cron/backup-event-store`
+  
+  Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` header.
+  
+  **Generation:**
+  ```bash
+  openssl rand -base64 48
+  ```
+</ParamField>
+
+<ParamField path="DEPLOY_REVALIDATE_SECRET" type="string">
+  Bearer token used to protect the post-deploy revalidation webhook.
+  
+  **Protected route:** `/api/revalidate/deploy`
+  
+  **Generation:**
+  ```bash
+  openssl rand -base64 48
+  ```
+  
+  See [Post-deploy revalidation](#post-deploy-revalidation) below.
+</ParamField>
+
+## Stripe payment integration
+
+<ParamField path="STRIPE_WEBHOOK_SECRET" type="string">
+  Webhook signing secret used to verify Stripe webhook events at `/api/webhooks/stripe`.
+  
+  **Obtained from:** Stripe Dashboard → Webhooks → Signing secret
+</ParamField>
+
+### Stripe Payment Links (client-side)
+
+These are public variables used for partner page CTAs. If missing, partner CTAs fall back to contact email.
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_SPOTLIGHT_STANDARD" type="string">
+  Payment Link URL for Spotlight Standard package.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_SPOTLIGHT_TAKEOVER" type="string">
+  Payment Link URL for Spotlight Takeover package.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_PROMOTED" type="string">
+  Payment Link URL for Promoted Listing package.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_ADDON_WHATSAPP" type="string">
+  Payment Link URL for WhatsApp Announcement add-on.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_ADDON_NEWSLETTER" type="string">
+  Payment Link URL for Newsletter Inclusion add-on.
+</ParamField>
+
+### Stripe Payment Link ID mapping (server-side)
+
+Optional mapping of Stripe Payment Link IDs to package keys for admin queue labels.
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_STANDARD" type="string">
+  Payment Link ID for Spotlight Standard (used for admin order labeling).
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_TAKEOVER" type="string">
+  Payment Link ID for Spotlight Takeover (used for admin order labeling).
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_PROMOTED" type="string">
+  Payment Link ID for Promoted Listing (used for admin order labeling).
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_ADDON_WHATSAPP" type="string">
+  Payment Link ID for WhatsApp add-on (used for admin order labeling).
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_ADDON_NEWSLETTER" type="string">
+  Payment Link ID for Newsletter add-on (used for admin order labeling).
+</ParamField>
+
+## Production deployment notes
+
+<Warning>
+  In Vercel `preview` or `production` environments, the following conditions trigger startup failure:
+  
+  - Missing `DATA_MODE` variable
+  - Invalid `DATA_MODE` value (must be `remote`, `local`, or `test`)
+</Warning>
+
+<Info>
+  For Postgres-backed runtime behavior in production:
+  
+  1. Set `DATABASE_URL` to your Postgres connection string
+  2. Set `DATA_MODE=remote`
+  3. Ensure `AUTH_SECRET` is at least 32 characters
+</Info>
+
+## Post-deploy revalidation
+
+The `/api/revalidate/deploy` endpoint forces a live events reload and revalidates the homepage immediately after deployment.
+
+**Usage:**
+```bash
+curl -X POST "https://your-domain.com/api/revalidate/deploy" \
+  -H "Authorization: Bearer $DEPLOY_REVALIDATE_SECRET"
+```
+
+This ensures preview and production deployments display current data on first load.
+
+## Secret generation quick reference
+
+<Accordion title="Generate all secrets at once">
+  ```bash
+  # AUTH_SECRET, CRON_SECRET, DEPLOY_REVALIDATE_SECRET (32+ chars)
+  openssl rand -base64 48
+  
+  # ADMIN_KEY
+  openssl rand -hex 24
+  
+  # ADMIN_RESET_PASSCODE
+  openssl rand -hex 32
+  ```
+</Accordion>
+
+## Environment setup checklist
+
+<Accordion title="Minimum required variables">
+  ```bash
+  # Required for all environments
+  AUTH_SECRET=<generate with openssl rand -base64 48>
+  
+  # Required in production/preview
+  DATA_MODE=remote
+  DATABASE_URL=postgresql://user:pass@host:5432/dbname?sslmode=require
+  ```
+</Accordion>
+
+<Accordion title="Optional admin features">
+  ```bash
+  # Enable admin panel
+  ADMIN_KEY=<generate with openssl rand -hex 24>
+  
+  # Enable admin reset protection
+  ADMIN_RESET_PASSCODE=<generate with openssl rand -hex 32>
+  
+  # Adjust admin notification cache (seconds)
+  ADMIN_NOTIFICATION_CACHE_SECONDS=15
+  ```
+</Accordion>
+
+<Accordion title="Optional Google integrations">
+  ```bash
+  # Geocoding (precise coordinates)
+  GOOGLE_MAPS_API_KEY=<from Google Cloud Console>
+  
+  # Admin backup via Sheet API
+  GOOGLE_SHEET_ID=<sheet ID>
+  GOOGLE_SERVICE_ACCOUNT_KEY=<compact JSON credentials>
+  
+  # Alternative: Admin backup via CSV URL
+  REMOTE_CSV_URL=<published CSV URL>
+  ```
+</Accordion>
+
+<Accordion title="Optional security and automation">
+  ```bash
+  # Protect cron endpoints
+  CRON_SECRET=<generate with openssl rand -base64 48>
+  
+  # Protect deploy revalidation
+  DEPLOY_REVALIDATE_SECRET=<generate with openssl rand -base64 48>
+  ```
+</Accordion>

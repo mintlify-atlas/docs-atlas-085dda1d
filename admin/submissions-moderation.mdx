@@ -1,0 +1,232 @@
+---
+title: Event submission moderation
+description: Review, accept, and decline community-submitted events with spam detection and auto-revalidation
+---
+
+The Event Submissions system allows event hosts to submit events for inclusion in OOOC Fête Finder. As an admin, you review, accept, or decline submissions with built-in spam detection.
+
+## Submissions overview
+
+The Event Submissions Card in `/admin/content` provides:
+
+- Pending, accepted, and declined submission queues
+- Automatic spam signal detection
+- One-click accept with auto-revalidation
+- Decline with reason tracking
+- Open/closed submission toggle
+- Metrics for last 7 days
+
+## Submission status tabs
+
+Submissions are organized by status:
+
+<CardGroup cols={3}>
+  <Card title="Pending" icon="clock">
+    Awaiting admin review and decision
+  </Card>
+  <Card title="Accepted" icon="check">
+    Approved and added to the live event sheet
+  </Card>
+  <Card title="Declined" icon="xmark">
+    Rejected with a recorded reason
+  </Card>
+</CardGroup>
+
+## Reviewing a submission
+
+Each submission displays:
+
+### Primary fields
+
+- **Event Name**: Title of the event
+- **Date and Time**: Event date, start time, and optional end time
+- **Location**: Venue or location name
+- **Host Email**: Submitter's contact email
+- **Proof Link**: URL provided to verify event authenticity
+
+### Optional fields
+
+Expand the "Optional details" section to view:
+
+- End time
+- Genre
+- Price
+- Age restrictions
+- Indoor/Outdoor venue type
+- Arrondissement
+- Additional notes from the host
+
+### Spam signals
+
+Spam detection flags suspicious submissions with badges:
+
+| Signal | Description |
+|--------|-------------|
+| honeypot_filled | Hidden field was filled (bot detection) |
+| completed_too_fast | Form completed in under 3 seconds |
+
+Submissions with spam signals should be reviewed carefully before accepting.
+
+<Warning>
+Spam signals are **indicators**, not automatic rejections. Legitimate submissions can occasionally trigger these flags. Always review the proof link and event details.
+</Warning>
+
+## Accepting a submission
+
+<Steps>
+  <Step title="Verify event details">
+    Check the event name, date, location, and proof link for legitimacy
+  </Step>
+  
+  <Step title="Review spam signals">
+    Confirm the submission doesn't have suspicious spam flags
+  </Step>
+  
+  <Step title="Click Accept">
+    The event is immediately added to the event sheet in Postgres
+  </Step>
+  
+  <Step title="Automatic revalidation">
+    The homepage revalidates automatically, making the event live within seconds
+  </Step>
+</Steps>
+
+<Note>
+Accepting a submission creates a new row in the Event Sheet Editor with the submitted data and generates an Event Key automatically.
+</Note>
+
+## Declining a submission
+
+<Steps>
+  <Step title="Select decline reason">
+    Choose a reason from the dropdown:
+    - Not enough information
+    - Duplicate submission
+    - Event not relevant
+    - Unable to verify
+    - Spam signal
+    - Other (requires custom reason)
+  </Step>
+  
+  <Step title="Add custom reason (if Other)">
+    Type a specific reason in the text field that appears
+  </Step>
+  
+  <Step title="Click Decline">
+    The submission moves to the Declined tab with the reason recorded
+  </Step>
+</Steps>
+
+Decline reasons are stored with the submission for future reference.
+
+## Decline reason options
+
+| Reason | When to use |
+|--------|-------------|
+| Not enough information | Missing critical details (date, location, proof link) |
+| Duplicate submission | Event already in the sheet or previously submitted |
+| Event not relevant | Outside OOOC's coverage area or genre focus |
+| Unable to verify | Proof link broken or event cannot be confirmed |
+| Spam signal | Triggered spam detection flags and looks suspicious |
+| Other | Custom reason (requires text input) |
+
+## Submission metrics
+
+The metrics grid shows:
+
+| Metric | Description |
+|--------|-------------|
+| Pending | Current submissions awaiting review |
+| Accepted (7d) | Approvals in the last 7 days |
+| Declined (7d) | Rejections in the last 7 days |
+| Total | All-time submission count |
+
+## Opening and closing submissions
+
+Toggle the submission endpoint using the **Open/Closed** switch:
+
+- **Open**: The public submit form is accessible at `/submit`
+- **Closed**: The submit endpoint is blocked, returning an error
+
+Use this to:
+- Prevent submissions during high-volume periods
+- Close submissions for seasonal breaks
+- Temporarily disable while handling a backlog
+
+<Info>
+Closing submissions displays a warning banner to admins and blocks the `/api/events/submit` endpoint completely.
+</Info>
+
+## Submission data fields
+
+### Required fields
+
+- Event name
+- Date (YYYY-MM-DD format)
+- Start time (HH:MM format)
+- Location
+- Host email
+- Proof link
+
+### Optional fields
+
+- End time
+- Genre
+- Price (free text)
+- Age restrictions
+- Indoor/Outdoor
+- Arrondissement
+- Notes (free text, max 500 characters)
+
+## Anti-spam measures
+
+The submission form includes:
+
+### Honeypot field
+
+A hidden field that humans shouldn't fill. Bots often fill all fields, triggering this signal.
+
+### Timing check
+
+Submissions completed in under 3 seconds are flagged as `completed_too_fast`. Legitimate users typically take 10+ seconds.
+
+### Fingerprinting
+
+Each submission records:
+- Source IP hash
+- Email IP hash
+- Browser fingerprint hash
+
+This helps identify repeat spam attempts from the same source.
+
+## Reviewed submission history
+
+Accepted and declined submissions show:
+
+- **Reviewed At**: Timestamp of admin decision
+- **Reviewed By**: Admin user who made the decision
+- **Review Reason**: Decline reason (for declined submissions)
+- **Accepted Event Key**: The generated Event Key (for accepted submissions)
+
+## Submission settings storage
+
+The Open/Closed setting is stored in:
+
+```text
+Store path: /var/data/event-submissions-settings.json
+```
+
+The settings status card shows:
+- Provider (file / memory / postgres)
+- Location path
+- Last updated timestamp and admin user
+
+## Best practices
+
+- **Review pending submissions daily** to provide timely responses to hosts
+- **Verify proof links** by opening them in a new tab before accepting
+- **Check for duplicates** by searching the event sheet for similar events
+- **Use clear decline reasons** to help hosts improve future submissions
+- **Monitor spam signals** but don't auto-reject based on flags alone
+- **Close submissions temporarily** during event sheet overhauls or migrations
+- **Respond to hosts** directly via email if a submission needs clarification

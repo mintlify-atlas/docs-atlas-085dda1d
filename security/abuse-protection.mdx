@@ -1,0 +1,181 @@
+---
+title: Abuse protection
+description: Multi-layered abuse protection measures for event submissions and user actions
+---
+
+OOOC Fête Finder implements multiple layers of abuse protection to prevent spam, bot submissions, and malicious activity while maintaining a seamless user experience.
+
+## Event submission protection
+
+Event submissions are the most critical entry point for potential abuse. Multiple checks are performed before accepting a submission.
+
+### Content fingerprinting
+
+Each event submission generates a unique fingerprint based on core event details:
+
+```typescript
+fingerprint = [
+  eventName,
+  date,
+  startTime,
+  location,
+  proofLink
+].join('|').toLowerCase()
+```
+
+The fingerprint is normalized (whitespace collapsed, lowercased) and hashed before storage.
+
+<ParamField path="Limit" type="1 submission / 24 hours">
+  Identical submissions (same fingerprint) are blocked for 24 hours
+</ParamField>
+
+See `buildEventSubmissionFingerprint` in `features/events/submissions/store.ts:110`.
+
+### Honeypot field
+
+The event submission form includes a hidden honeypot field that should remain empty in legitimate submissions.
+
+<Info>
+  The honeypot field is hidden via CSS and should not be visible to human users. Bots that auto-fill all form fields will typically fill this field, marking the submission as spam.
+</Info>
+
+**Detection:**
+- If the `honeypot` field contains any value, the submission is flagged with `honeypot_filled` spam signal
+- The submission is still accepted but marked for review
+
+See spam signal evaluation in `features/events/submissions/store.ts:146`.
+
+### Completion time detection
+
+The form tracks how long a user takes to complete the submission. Submissions completed too quickly are likely automated.
+
+<ParamField path="Minimum time" type="4 seconds">
+  Submissions completed in less than 4 seconds are flagged as suspicious
+</ParamField>
+
+**Implementation:**
+- Frontend captures `formStartedAt` timestamp when the form is opened
+- Backend calculates elapsed time: `(now - formStartedAt) / 1000`
+- If elapsed time < 4 seconds, submission is flagged with `completed_too_fast` spam signal
+
+See `computeCompletionSeconds` in `features/events/submissions/store.ts:125`.
+
+### Spam signal evaluation
+
+All submissions are evaluated for spam signals before storage:
+
+```typescript
+interface EventSubmissionSpamSignals {
+  honeypotFilled: boolean;
+  completedTooFast: boolean;
+  reasons: Array<'honeypot_filled' | 'completed_too_fast'>;
+}
+```
+
+Submissions with any spam signals are:
+- Accepted with 200 status (to avoid revealing detection)
+- Stored in the database with spam flags
+- Automatically flagged for manual review
+
+See `evaluateSubmissionSpamSignals` in `features/events/submissions/store.ts:141`.
+
+## Multi-factor rate limiting
+
+Event submissions are protected by three concurrent rate limits:
+
+1. **IP-based limit:** 20 submissions per 10 minutes per IP
+2. **Email+IP limit:** 5 submissions per hour per email/IP combination
+3. **Fingerprint limit:** 1 submission per 24 hours per unique content fingerprint
+
+All three limits must pass for a submission to be accepted.
+
+<Note>
+  See the [rate limiting](/security/rate-limiting) page for complete rate limit details.
+</Note>
+
+## Authentication protection
+
+User authentication via email is protected against brute force and enumeration attacks.
+
+### Email verification rate limits
+
+<ParamField path="IP limit" type="60 requests / 60 seconds">
+  Prevents single IP from overwhelming the verification endpoint
+</ParamField>
+
+<ParamField path="Email + IP limit" type="6 requests / 15 minutes">
+  Prevents targeted attacks against specific email addresses
+</ParamField>
+
+See rate limit implementation in `app/api/auth/verify/route.ts:59`.
+
+### Input validation
+
+**Email validation:**
+- Must match email regex pattern: `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`
+- Automatically normalized to lowercase
+- Maximum 254 characters (RFC 5321 limit)
+
+**Name validation:**
+- First and last name must be at least 2 characters
+- Whitespace is trimmed and normalized
+
+See validation in `app/api/auth/verify/route.ts:75`.
+
+### Consent requirement
+
+<Warning>
+  Email collection requires explicit user consent. Submissions without consent (`consent: false`) are rejected with 400 status.
+</Warning>
+
+## Tracking protection
+
+Analytics tracking endpoints have generous rate limits to avoid blocking legitimate user activity:
+
+| Endpoint | IP Limit | Session Limit |
+|----------|----------|---------------|
+| `/api/track` | 240/min | 200/min |
+| `/api/track/discovery` | 180/min | 150/min |
+
+<Info>
+  When rate limits are exceeded, tracking requests return 202 Accepted without recording the event. This prevents breaking the user experience while stopping abuse.
+</Info>
+
+## Data privacy in abuse detection
+
+All abuse detection mechanisms respect user privacy:
+
+<Note>
+  - IP addresses are HMAC-hashed before storage in rate limit counters
+  - Email addresses are HMAC-hashed in rate limit keys
+  - Raw IPs and emails are never persisted in the rate limit database
+  - Fingerprints are content-based (not device-based)
+</Note>
+
+Hashing uses `AUTH_SECRET` as the HMAC key:
+
+```typescript
+keyHash = createHmac('sha256', env.AUTH_SECRET)
+  .update([scope, ...keyParts].join('|'))
+  .digest('hex')
+```
+
+## Admin controls
+
+Event submission can be globally disabled via admin settings:
+
+- Stored in `EventSubmissionSettingsStore`
+- When disabled, all submissions return 503 Service Unavailable
+- Enables quick response to abuse waves
+
+See submission settings check in `app/api/event-submissions/route.ts:71`.
+
+## Spam submission review
+
+Submissions flagged with spam signals are stored but require manual review:
+
+- Admin dashboard shows spam signal flags
+- Submissions can be approved or rejected
+- Legitimate submissions caught by spam filters can be recovered
+
+This approach prevents false negatives (blocking legitimate users) while maintaining abuse protection.

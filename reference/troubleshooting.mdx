@@ -1,0 +1,723 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for OOOC Fête Finder development
+---
+
+This guide covers common issues you might encounter while developing OOOC Fête Finder and their solutions.
+
+## Environment Issues
+
+### Missing DATABASE_URL
+
+<Accordion title="Error: DATABASE_URL is required">
+
+**Symptom:**
+```
+DATABASE_URL (or POSTGRES_URL) is required to bootstrap Postgres store.
+```
+
+**Solution:**
+
+Add `DATABASE_URL` to your `.env.local`:
+
+```bash .env.local
+DATABASE_URL=postgresql://user:password@host:port/database
+```
+
+Or use `POSTGRES_URL` as an alias:
+
+```bash .env.local
+POSTGRES_URL=postgresql://user:password@host:port/database
+```
+
+**For local development**, you can use a local Postgres instance:
+
+```bash
+DATABASE_URL=postgresql://localhost:5432/oooc_fete_finder
+```
+
+</Accordion>
+
+### Missing AUTH_SECRET
+
+<Accordion title="Error: AUTH_SECRET must be at least 32 characters">
+
+**Symptom:**
+- Admin login fails
+- Token generation errors
+- Rate limiting breaks
+
+**Solution:**
+
+Generate a secure random string (32+ characters):
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Add to `.env.local`:
+
+```bash .env.local
+AUTH_SECRET=your-generated-secret-here-must-be-at-least-32-characters-long
+```
+
+<Warning>
+Never commit `AUTH_SECRET` to version control. Use different secrets for development and production.
+</Warning>
+
+</Accordion>
+
+### DATA_MODE not set
+
+<Accordion title="Error: DATA_MODE is required in production">
+
+**Symptom:**
+```
+App fails fast at startup: DATA_MODE is required in production
+```
+
+**Solution:**
+
+Set `DATA_MODE` in your environment:
+
+```bash .env.local
+DATA_MODE=remote
+```
+
+**Valid values:**
+- `remote`: Use Postgres event store with CSV fallback (production)
+- `local`: Development mode (not recommended for production)
+
+<Note>
+The app enforces `DATA_MODE=remote` in production deployments to prevent misconfiguration.
+</Note>
+
+</Accordion>
+
+## Database Issues
+
+### Connection timeout
+
+<Accordion title="Error: Connection timeout / ECONNREFUSED">
+
+**Symptom:**
+```
+connect ECONNREFUSED 127.0.0.1:5432
+```
+
+**Causes:**
+1. Postgres is not running
+2. Wrong host/port in `DATABASE_URL`
+3. Network firewall blocking connection
+4. Postgres not accepting remote connections
+
+**Solutions:**
+
+**1. Check if Postgres is running:**
+```bash
+ps aux | grep postgres
+```
+
+**2. Verify connection string format:**
+```bash
+postgresql://username:password@host:port/database
+```
+
+**3. Test connection directly:**
+```bash
+psql "$DATABASE_URL"
+```
+
+**4. For Vercel Postgres:**
+Ensure you're using the pooled connection string from the Vercel dashboard.
+
+</Accordion>
+
+### Table does not exist
+
+<Accordion title="Error: relation app_kv_store does not exist">
+
+**Symptom:**
+```
+error: relation "app_kv_store" does not exist
+```
+
+**Solution:**
+
+Run the bootstrap script to create tables:
+
+```bash
+pnpm bootstrap:postgres-store
+```
+
+This creates:
+- `app_kv_store`
+- `app_event_store_columns`
+- `app_event_store_rows`
+- `app_event_store_meta`
+- `app_event_store_settings`
+
+**Verify tables exist:**
+```bash
+pnpm db:cli -- status
+```
+
+</Accordion>
+
+### Row count mismatch
+
+<Accordion title="Warning: Row counts don't match">
+
+**Symptom:**
+From `pnpm db:cli -- rows`:
+```
+- table rows count: 81
+- table meta row_count: 75
+- table counts match: no
+```
+
+**Causes:**
+- Partial import failure
+- Manual database modifications
+- Interrupted save operation
+
+**Solution:**
+
+**1. Check for data corruption:**
+```bash
+pnpm db:cli -- sample 10
+```
+
+**2. Re-import from backup:**
+Use admin panel → Operations → Restore from backup
+
+**3. Force fresh import:**
+```bash
+pnpm bootstrap:postgres-store
+```
+
+<Warning>
+Bootstrapping will skip seeding if tables already contain data. To force re-seed, manually clear tables first (use with caution).
+</Warning>
+
+</Accordion>
+
+## Build Issues
+
+### Module not found
+
+<Accordion title="Error: Module not found: Can't resolve '@/...'">
+
+**Symptom:**
+```
+Module not found: Can't resolve '@/features/...'
+```
+
+**Solutions:**
+
+**1. Clear Next.js cache:**
+```bash
+rm -rf .next
+pnpm dev
+```
+
+**2. Clear node_modules and reinstall:**
+```bash
+rm -rf node_modules pnpm-lock.yaml
+pnpm install
+```
+
+**3. Verify tsconfig.json paths:**
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./*"]
+    }
+  }
+}
+```
+
+</Accordion>
+
+### Type errors
+
+<Accordion title="Build fails with TypeScript errors">
+
+**Symptom:**
+```
+Type error: Property 'xyz' does not exist on type '...'
+```
+
+**Solutions:**
+
+**1. Run type checker:**
+```bash
+pnpm exec tsc --noEmit
+```
+
+**2. Common fixes:**
+- Update type definitions: `pnpm add -D @types/node @types/react`
+- Restart TypeScript server in VS Code: Cmd+Shift+P → "TypeScript: Restart TS Server"
+- Check for version mismatches between `react` and `@types/react`
+
+**3. Skip type checking temporarily:**
+```bash
+pnpm build --no-lint
+```
+
+<Warning>
+Only skip type checking for debugging. Always fix type errors before committing.
+</Warning>
+
+</Accordion>
+
+### Out of memory
+
+<Accordion title="Error: JavaScript heap out of memory">
+
+**Symptom:**
+```
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+```
+
+**Solution:**
+
+Increase Node.js heap size:
+
+```bash
+NODE_OPTIONS="--max-old-space-size=4096" pnpm build
+```
+
+Or add to `.env`:
+```bash
+NODE_OPTIONS=--max-old-space-size=4096
+```
+
+</Accordion>
+
+## Testing Issues
+
+### Tests fail with environment errors
+
+<Accordion title="Error: Environment variable not defined">
+
+**Symptom:**
+```
+ReferenceError: process.env.AUTH_SECRET is not defined
+```
+
+**Solution:**
+
+Ensure `test/setup-env.ts` is configured in `vitest.config.ts`:
+
+```typescript vitest.config.ts
+export default defineConfig({
+  test: {
+    setupFiles: ["test/setup-env.ts"],
+  },
+});
+```
+
+**Verify setup file exists:**
+```typescript test/setup-env.ts
+process.env.AUTH_SECRET ??= "test-auth-secret-0123456789...";
+process.env.DATA_MODE ??= "remote";
+```
+
+</Accordion>
+
+### Mock not working
+
+<Accordion title="Error: Mocked module returns real implementation">
+
+**Symptom:**
+Mocked functions call real implementations instead of mocks.
+
+**Solutions:**
+
+**1. Reset modules before mocking:**
+```typescript
+vi.resetModules();
+vi.doMock("@/lib/module", () => ({ ... }));
+const module = await import("@/lib/module");
+```
+
+**2. Use dynamic imports:**
+```typescript
+// Don't do this
+import { fn } from "@/lib/module";
+vi.mock("@/lib/module"); // Too late!
+
+// Do this
+vi.doMock("@/lib/module", () => ({ fn: vi.fn() }));
+const { fn } = await import("@/lib/module");
+```
+
+**3. Clear mocks between tests:**
+```typescript
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+```
+
+</Accordion>
+
+### Coverage not generated
+
+<Accordion title="Error: Coverage directory is empty">
+
+**Symptom:**
+Running `pnpm test:coverage` doesn't generate HTML reports.
+
+**Solutions:**
+
+**1. Verify coverage config:**
+```typescript vitest.config.ts
+coverage: {
+  provider: "v8",
+  reporter: ["text", "html"],
+  include: [
+    "features/data-management/**/*.ts",
+    "lib/platform/postgres/**/*.ts",
+    "features/auth/**/*.ts",
+  ],
+}
+```
+
+**2. Install coverage provider:**
+```bash
+pnpm add -D @vitest/coverage-v8
+```
+
+**3. Check reporter output:**
+Look for `coverage/index.html` in project root.
+
+</Accordion>
+
+## Runtime Issues
+
+### Admin login fails
+
+<Accordion title="Admin login returns 401 Unauthorized">
+
+**Symptoms:**
+- Admin panel login fails
+- `x-admin-key` header rejected
+- `/api/admin/*` endpoints return 401
+
+**Solutions:**
+
+**1. Verify ADMIN_KEY is set:**
+```bash
+echo $ADMIN_KEY
+```
+
+**2. Check key matches:**
+Ensure the key in `.env.local` matches what you're using in the UI.
+
+**3. Restart dev server:**
+```bash
+pnpm dev
+```
+
+**4. Clear browser cache:**
+Admin session tokens may be stale.
+
+<Note>
+If `ADMIN_KEY` is not set, all admin endpoints are disabled. This is intentional for builds without admin access.
+</Note>
+
+</Accordion>
+
+### Rate limit errors
+
+<Accordion title="Error: 429 Too Many Requests">
+
+**Symptom:**
+```
+HTTP 429: Rate limit exceeded
+Retry-After: 42
+```
+
+**Causes:**
+- `POST /api/auth/verify`: 60/min per IP, 6/15min per email+IP
+- `POST /api/event-submissions`: 20/10min per IP, 5/60min per email+IP
+- `POST /api/track`: Rate limited per IP
+
+**Solutions:**
+
+**1. Wait for reset:**
+Check `Retry-After` header for seconds until reset.
+
+**2. Clean up test counters:**
+```bash
+curl -X GET "http://localhost:3000/api/cron/cleanup-rate-limits" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+**3. Check repository health:**
+```bash
+pnpm health:check
+```
+
+**4. In development, clear Postgres:**
+```sql
+DELETE FROM app_kv_store WHERE key LIKE 'rate_limit:%';
+```
+
+<Warning>
+Do not clear rate limits in production. This defeats abuse protection.
+</Warning>
+
+</Accordion>
+
+### Featured events not showing
+
+<Accordion title="Featured events don't appear on homepage">
+
+**Symptom:**
+Events marked as featured in CSV or admin don't show up.
+
+**Causes:**
+1. Legacy `Featured` column used (now deprecated)
+2. Schedule entries not created
+3. Effective times are in the past
+
+**Solutions:**
+
+**1. Migrate to scheduler:**
+```bash
+pnpm bootstrap:featured-schedule
+```
+
+**2. Use Featured Events Manager:**
+Go to `/admin` → Featured Events Manager → "Feature now"
+
+**3. Verify schedule:**
+Check `app_featured_event_schedule` table for active entries with:
+- `status = 'scheduled'`
+- `effective_start_at <= NOW()`
+- `effective_end_at >= NOW()`
+
+**4. Revalidate cache:**
+From admin panel → Operations → "Revalidate Homepage"
+
+</Accordion>
+
+### CSV import fails
+
+<Accordion title="Error: CSV structure mismatch">
+
+**Symptom:**
+- Import fails with row count errors
+- Events missing after import
+- Columns misaligned
+
+**Solutions:**
+
+**1. Diagnose CSV structure:**
+```bash
+pnpm csv:diagnose -- --remote
+```
+
+**2. Common issues:**
+- **Unquoted commas**: Wrap cells with commas in double quotes
+- **Line breaks in cells**: Use quoted strings: `"Line 1\nLine 2"`
+- **Stray quotes**: Escape with double quotes: `"She said ""hello"""`
+
+**3. Fix in Google Sheets:**
+- Check for extra columns at the end
+- Remove trailing commas
+- Verify header row is row 1
+
+**4. Test with local file:**
+```bash
+pnpm csv:diagnose -- --file data/events.csv
+```
+
+</Accordion>
+
+### Geocoding not working
+
+<Accordion title="Map shows default location instead of event location">
+
+**Symptom:**
+Events appear at default coordinates instead of actual addresses.
+
+**Causes:**
+1. `GOOGLE_MAPS_API_KEY` not set
+2. Geocoding API not enabled in Google Cloud Console
+3. Coordinate cache not warmed
+
+**Solutions:**
+
+**1. Enable Geocoding API:**
+Google Cloud Console → APIs & Services → Enable "Geocoding API"
+
+**2. Set API key:**
+```bash .env.local
+GOOGLE_MAPS_API_KEY=your-api-key-here
+```
+
+**3. Warm coordinate cache:**
+From admin panel → Operations → "Save & Revalidate"
+
+This pre-geocodes all event locations and stores in `maps:locations:v1` KV key.
+
+**4. Check cache status:**
+```bash
+pnpm db:cli -- get maps:locations:v1
+```
+
+<Info>
+Without geocoding, events fall back to estimated coordinates based on district/area.
+</Info>
+
+</Accordion>
+
+## Development Workflow Issues
+
+### Hot reload not working
+
+<Accordion title="Changes not reflected in browser">
+
+**Symptom:**
+Code changes don't trigger browser refresh.
+
+**Solutions:**
+
+**1. Restart dev server:**
+```bash
+pnpm dev
+```
+
+**2. Clear Next.js cache:**
+```bash
+rm -rf .next
+pnpm dev
+```
+
+**3. Check Turbopack:**
+Ensure dev script uses `--turbopack` flag:
+```json package.json
+{
+  "scripts": {
+    "dev": "next dev --turbopack"
+  }
+}
+```
+
+**4. Disable browser cache:**
+Open DevTools → Network → Disable cache
+
+</Accordion>
+
+### Biome formatting conflicts
+
+<Accordion title="Files keep getting reformatted">
+
+**Symptom:**
+Biome and other formatters fight over formatting.
+
+**Solutions:**
+
+**1. Use Biome exclusively:**
+Disable Prettier, ESLint auto-format in editor.
+
+**2. Run format before commit:**
+```bash
+pnpm fix
+```
+
+**3. Configure VS Code:**
+```json .vscode/settings.json
+{
+  "editor.defaultFormatter": "biomejs.biome",
+  "editor.formatOnSave": true
+}
+```
+
+</Accordion>
+
+## Deployment Issues
+
+### Build succeeds locally but fails in Vercel
+
+<Accordion title="Error: Build fails in Vercel but works locally">
+
+**Common causes:**
+1. Environment variables not set in Vercel
+2. Node version mismatch
+3. Build cache issues
+
+**Solutions:**
+
+**1. Set environment variables:**
+Vercel Dashboard → Project → Settings → Environment Variables
+
+Required:
+- `AUTH_SECRET`
+- `DATABASE_URL`
+- `DATA_MODE=remote`
+
+**2. Match Node versions:**
+Check `.node-version` or `package.json` engines field.
+
+**3. Clear build cache:**
+Vercel Dashboard → Deployments → ⋮ → Redeploy → Clear cache
+
+</Accordion>
+
+### Post-deploy stale data
+
+<Accordion title="New deployment shows old events">
+
+**Symptom:**
+After deploying, site shows cached/stale event data.
+
+**Solution:**
+
+Trigger post-deploy revalidation:
+
+```bash
+curl -X POST "https://your-domain.com/api/revalidate/deploy" \
+  -H "Authorization: Bearer $DEPLOY_REVALIDATE_SECRET"
+```
+
+This forces:
+- Live events reload from Postgres
+- Homepage revalidation
+- Fresh ISR cache
+
+**Set up in CI/CD:**
+Add as a post-deployment step in Vercel or GitHub Actions.
+
+</Accordion>
+
+## Getting Help
+
+If you encounter an issue not covered here:
+
+1. **Check logs:**
+   - Development: Console output from `pnpm dev`
+   - Production: Vercel deployment logs
+   - Database: `pnpm health:check`
+
+2. **Run diagnostics:**
+   ```bash
+   pnpm health:check
+   pnpm db:cli -- status
+   pnpm csv:diagnose -- --remote
+   ```
+
+3. **Review documentation:**
+   - [Environment Variables](/reference/environment-variables)
+   - [API Endpoints](/reference/api-endpoints)
+   - [Architecture Overview](/architecture/overview)
+
+4. **Check source code:**
+   Many scripts have detailed inline comments explaining behavior.
+
+5. **Report issues:**
+   If you find a bug, document the error message, steps to reproduce, and environment details.

@@ -1,0 +1,280 @@
+---
+title: Geocoding integration
+description: Convert Paris addresses to map coordinates using Google Maps Geocoding API with confidence scoring and fallback strategies
+---
+
+OOOC Fête Finder geocodes event addresses to display them on interactive maps. The integration uses Google Maps Geocoding API with Paris-specific confidence scoring, bounds validation, and arrondissement-based fallbacks.
+
+## Configuration
+
+### Environment variables
+
+```bash
+GOOGLE_MAPS_API_KEY=your_api_key_here
+```
+
+<Note>
+  The Geocoding API requires an API key (not OAuth). If unset, the system falls back to arrondissement center coordinates.
+</Note>
+
+### Get an API key
+
+<Steps>
+  <Step title="Enable Geocoding API">
+    1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+    2. Create or select a project
+    3. Navigate to **APIs & Services** > **Library**
+    4. Search for "Geocoding API"
+    5. Click **Enable**
+  </Step>
+
+  <Step title="Create API key">
+    1. Go to **APIs & Services** > **Credentials**
+    2. Click **Create Credentials** > **API key**
+    3. Copy the generated key
+  </Step>
+
+  <Step title="Restrict API key (recommended)">
+    1. Click **Edit API key**
+    2. Under **API restrictions**, select **Restrict key**
+    3. Choose **Geocoding API**
+    4. Optionally add application restrictions
+  </Step>
+
+  <Step title="Configure environment">
+    Add the API key to your environment:
+
+    ```bash
+    GOOGLE_MAPS_API_KEY=AIza...
+    ```
+  </Step>
+</Steps>
+
+## Implementation details
+
+### Paris-specific geocoding
+
+The integration includes Paris-specific enhancements (features/maps/coordinate-service.ts:53-69):
+
+```typescript
+const PARIS_GEOCODING_CONFIG = {
+  parisCenter: { lat: 48.8566, lng: 2.3522 },
+  confidenceThresholds: {
+    ROOFTOP: 0.95,           // Exact building location
+    RANGE_INTERPOLATED: 0.85, // Street address interpolation
+    GEOMETRIC_CENTER: 0.7,    // Center of street/area
+    APPROXIMATE: 0.5,         // Approximate location
+  },
+  bounds: {
+    north: 48.92,
+    south: 48.8,
+    east: 2.48,
+    west: 2.22,
+  },
+};
+```
+
+### Query construction
+
+The system builds queries with arrondissement context (features/maps/coordinate-service.ts:74-87):
+
+```typescript
+// Input: "Le Bataclan", arrondissement: 11
+// Output: "Le Bataclan, 11e arrondissement, Paris, France"
+```
+
+<Info>
+  Adding arrondissement context improves geocoding accuracy by narrowing the search area within Paris.
+</Info>
+
+### Confidence scoring
+
+Confidence scores combine Google's accuracy with Paris-specific validation (features/maps/coordinate-service.ts:92-115):
+
+- **Base confidence**: From Google's location type (ROOFTOP, RANGE_INTERPOLATED, etc.)
+- **+0.1 bonus**: Coordinates within Paris bounds
+- **+0.1 bonus**: Formatted address matches requested arrondissement
+
+Final confidence is capped at 1.0.
+
+### Bounds validation
+
+All geocoded coordinates are validated against Paris bounds (features/maps/coordinate-service.ts:120-130). If coordinates fall outside, a warning is logged but the result is still returned.
+
+## Geocoding flow
+
+The `CoordinateService.getCoordinates` method (features/maps/coordinate-service.ts:296-464) follows this flow:
+
+<Steps>
+  <Step title="Validate input">
+    Check that location name and arrondissement are valid:
+    - Location name not empty, "TBA", or "TBC"
+    - Arrondissement is a number between 1-20
+  </Step>
+
+  <Step title="Check storage">
+    Look up the location in cached storage by key `{location}_{arrondissement}`.
+
+    If found and not marked as "estimated", return cached coordinates.
+  </Step>
+
+  <Step title="Geocode with API">
+    If not in storage or forcing refresh:
+    1. Build Paris search query
+    2. Call Google Geocoding API
+    3. Validate coordinates within Paris bounds
+    4. Calculate confidence score
+    5. Store result for future lookups
+  </Step>
+
+  <Step title="Fallback to arrondissement center">
+    If geocoding fails:
+    - Use arrondissement center coordinates
+    - Mark as "estimated" source
+    - Confidence: 0.5
+  </Step>
+</Steps>
+
+### Fatal error handling
+
+If a fatal API error occurs (lib/google/geocoding/api.ts:60-68), the system:
+
+1. Logs a single warning about the issue
+2. Switches to arrondissement fallback for all remaining locations
+3. Avoids repeated API calls and error logs
+
+Fatal errors include:
+- Missing or invalid API key
+- API not enabled in Google Cloud Console
+- Billing issues or trial ended
+- Request denied errors
+
+<Warning>
+  **Geocoding API unavailable**: If you see this warning, check that `GOOGLE_MAPS_API_KEY` is set and the Geocoding API is enabled in Google Cloud Console.
+</Warning>
+
+## API endpoints
+
+The integration uses Google Maps Geocoding API v3:
+
+- **Forward geocoding**: `GET https://maps.googleapis.com/maps/api/geocode/json?address={query}&key={apiKey}`
+- **Reverse geocoding**: `GET https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&key={apiKey}`
+
+### Timeouts
+
+- **Request timeout**: 10 seconds
+- **Batch delay**: 100ms between batches (rate limiting)
+- **Batch size**: 10 addresses per batch
+
+## Batch geocoding
+
+For bulk operations, use `geocodeAddressesBatch` (lib/google/geocoding/api.ts:135-224):
+
+```typescript
+const result = await GoogleGeocodingAPI.geocodeAddressesBatch(
+  addresses,
+  {
+    maxRetries: 2,
+    delayMs: 100,
+    batchSize: 10,
+  }
+);
+
+// Returns:
+{
+  successful: GeocodingResult[],
+  failed: GeocodingError[],
+  total: number,
+  successRate: number,
+}
+```
+
+<Info>
+  Batch geocoding processes addresses in parallel batches of 10 with exponential backoff retry for transient failures.
+</Info>
+
+## Storage and caching
+
+Geocoded locations are stored in the database with metadata:
+
+```typescript
+type EventLocation = {
+  id: string;                    // Storage key: {location}_{arrondissement}
+  name: string;                  // Original location name
+  arrondissement: number | "unknown";
+  coordinates: { lat: number; lng: number };
+  confidence: number;            // 0.0 to 1.0
+  source: "geocoded" | "estimated" | "manual";
+  lastUpdated: string;           // ISO 8601 timestamp
+};
+```
+
+### Source types
+
+- **geocoded**: Successfully geocoded via Google Maps API
+- **estimated**: Fallback to arrondissement center coordinates
+- **manual**: Manually set coordinates (highest confidence)
+
+### Upgrade from estimated to geocoded
+
+When the API becomes available, estimated locations are automatically upgraded to geocoded on next lookup (features/maps/coordinate-service.ts:318-356).
+
+## Usage in event processing
+
+The admin panel populates coordinates when importing events:
+
+1. Parse location name and arrondissement from event data
+2. Check if coordinates are already stored
+3. If not, geocode the location
+4. Store result for future events at the same location
+5. Attach coordinates to event record
+
+## Error handling
+
+The integration categorizes errors by type (features/maps/coordinate-service.ts:16-25):
+
+- `API_ERROR` - General API failure
+- `NO_RESULTS` - Address not found
+- `RATE_LIMIT` - Quota exceeded
+- `NETWORK_ERROR` - Timeout or connection failure
+- `PARSE_ERROR` - Invalid response format
+- `CONFIG_ERROR` - Missing or invalid API key
+
+## API reference
+
+The unified API is exported from lib/google/geocoding/api.ts:299-303:
+
+```typescript
+export const GoogleGeocodingAPI = {
+  geocodeAddress: geocodeAddressWithMapsAPI,
+  geocodeAddressesBatch: geocodeAddressesBatchOptimized,
+  reverseGeocode: reverseGeocodeWithMapsAPI,
+} as const;
+```
+
+### Methods
+
+- `geocodeAddress(address)` - Geocode a single address
+- `geocodeAddressesBatch(addresses, options)` - Batch geocode multiple addresses
+- `reverseGeocode(latitude, longitude)` - Convert coordinates to address
+
+## Performance considerations
+
+- **Storage first**: Always check cached storage before calling API
+- **Batch processing**: Process multiple locations in parallel batches
+- **Rate limiting**: 100ms delay between batches
+- **Retry logic**: Exponential backoff for transient failures
+- **Fatal error detection**: Stop API calls after fatal configuration errors
+
+## Cost optimization
+
+To minimize Google Maps API costs:
+
+1. Storage caches all geocoded locations
+2. Estimated locations are reused until API is configured
+3. Fatal errors prevent unnecessary API calls
+4. Batch processing reduces request overhead
+
+<Note>
+  Google Maps Geocoding API pricing: $5 per 1,000 requests. The first 40,000 requests per month are free.
+</Note>

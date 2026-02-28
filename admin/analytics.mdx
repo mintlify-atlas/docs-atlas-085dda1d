@@ -1,0 +1,283 @@
+---
+title: Analytics and insights
+description: Track event engagement, analyze discovery patterns, and export audience segments using the Insights dashboard
+---
+
+The Insights dashboard at `/admin/insights` provides comprehensive analytics on event engagement, search behavior, filter usage, and genre preferences. Use these insights to optimize event selection and placement.
+
+## Engagement metrics
+
+The dashboard tracks three primary engagement types:
+
+<CardGroup cols={3}>
+  <Card title="Views" icon="eye">
+    `click` events when users view event details
+  </Card>
+  <Card title="Outbound Clicks" icon="arrow-up-right-from-square">
+    `outbound_click` events when users visit event URLs
+  </Card>
+  <Card title="Calendar Saves" icon="calendar-plus">
+    `calendar_sync` events when users add events to calendars
+  </Card>
+</CardGroup>
+
+<Note>
+"Saved this" refers to **calendar sync interactions** tracked as aggregate engagement signals, not a user-visible personal saved events list.
+</Note>
+
+## Summary metrics
+
+The summary panel shows window-wide aggregates (default: 30 days):
+
+| Metric | Description |
+|--------|-------------|
+| Click Count | Total detail view interactions |
+| Deduped View Count | Unique event views per session |
+| Outbound Click Count | Total clicks to external event URLs |
+| Calendar Sync Count | Total calendar add actions |
+| Unique Session Count | Distinct user sessions with any engagement |
+| Unique View Sessions | Sessions with at least one view |
+| Unique Outbound Sessions | Sessions with at least one outbound click |
+| Unique Calendar Sessions | Sessions with at least one calendar save |
+| Outbound Session Rate | % of view sessions that clicked outbound |
+| Calendar Session Rate | % of view sessions that saved to calendar |
+| Outbound Interaction Rate | % of all clicks that were outbound |
+| Calendar Interaction Rate | % of all clicks that were calendar saves |
+
+## Daily time series
+
+The daily series chart visualizes:
+
+- Click count per day
+- Outbound click count per day
+- Calendar sync count per day
+
+Use this to identify:
+- Weekly engagement patterns
+- Campaign impact spikes
+- Seasonal trends
+
+## Top events table
+
+The top events table ranks up to 60 events by engagement (default view: 30 days):
+
+### Per-event metrics
+
+- **Event Key**: Unique event identifier
+- **Event Name**: Display name from event sheet
+- **Click Count**: Total views for this event
+- **Deduped View Count**: Unique views per session
+- **Outbound Click Count**: External URL clicks
+- **Calendar Sync Count**: Calendar add actions
+- **Unique Session Count**: Sessions that engaged with this event
+- **Outbound Session Rate**: % of view sessions that clicked outbound
+- **Calendar Session Rate**: % of view sessions that saved to calendar
+- **Outbound Interaction Rate**: % of clicks that were outbound
+- **Calendar Interaction Rate**: % of clicks that were calendar saves
+
+### Using the table
+
+Sort by different columns to find:
+- **Highest click count**: Most viewed events
+- **Highest calendar rate**: Events with best save conversion
+- **Highest outbound rate**: Events driving the most traffic to partners
+
+<Info>
+High outbound and calendar rates indicate strong intent. Use these events for Spotlight placements.
+</Info>
+
+## Discovery analytics
+
+Discovery analytics track how users explore events:
+
+### Summary metrics
+
+- **Search Count**: Total search queries performed
+- **Filter Apply Count**: Total filter selections
+- **Filter Clear Count**: Total filter removals
+- **Unique Session Count**: Sessions that used search or filters
+
+### Top searches
+
+The top searches section shows clustered query patterns:
+
+- **Query**: Normalized search term
+- **Count**: Total occurrences
+- **Variant Count**: Number of similar queries clustered together
+- **Variants**: Specific query variations (e.g., "techno", "Techno ", "TECHNO")
+
+Use this to:
+- Identify popular genres or venues
+- Discover trending themes
+- Optimize event titles and descriptions
+
+### Clustering modes
+
+Search clustering supports two modes:
+
+| Mode | Behavior |
+|------|----------|
+| Conservative | Stricter matching, fewer clusters |
+| Aggressive | More flexible, broader clusters |
+
+Switch modes to balance precision vs. pattern discovery.
+
+### Top filters
+
+The top filters section shows:
+
+- **Filter Group**: Category (genre, arrondissement, price_range, etc.)
+- **Filter Value**: Specific selection within the group
+- **Count**: Total applications
+
+Supported filter groups:
+- `date_range`
+- `day_night`
+- `arrondissement`
+- `genre`
+- `nationality`
+- `venue_type`
+- `venue_setting`
+- `oooc_pick`
+- `price_range`
+- `age_range`
+
+## Genre preferences
+
+The top genres section shows aggregate user preferences:
+
+- **Genre**: Music genre key (e.g., `techno`, `house`, `jazz`)
+- **Label**: Human-readable genre name
+- **Total Score**: Cumulative preference score across all users
+- **Unique Users**: Number of users with this preference
+
+This helps identify the most popular genres in your audience.
+
+## Audience segment export
+
+Export targeted audience lists as CSV based on behavior and preferences.
+
+### Export by discovery filters
+
+<Steps>
+  <Step title="Open the export form">
+    Locate the audience segment export controls in the Insights dashboard
+  </Step>
+  
+  <Step title="Add filter rules">
+    Select filter group + value pairs (e.g., `genre=techno`, `arrondissement=3rd`)
+  </Step>
+  
+  <Step title="Set min hits per rule">
+    Require users to have used each filter N times (default: 1)
+  </Step>
+  
+  <Step title="Set rule operator">
+    - **All**: Users must match ALL rules (AND logic)
+    - **Any**: Users must match ANY rule (OR logic)
+  </Step>
+  
+  <Step title="Export CSV">
+    Download the CSV with matching users
+  </Step>
+</Steps>
+
+### Export by search behavior
+
+Filter users who searched for specific terms:
+
+```text
+Search contains: "jazz"
+Min hits: 3
+```
+
+This exports users who searched for terms containing "jazz" at least 3 times.
+
+### Export by genre preference
+
+Filter users with strong genre preferences:
+
+<Steps>
+  <Step title="Select genre">
+    Choose a genre from the genre preference list
+  </Step>
+  
+  <Step title="Set min score">
+    Require a minimum preference score (default: 2, range: 1-100)
+  </Step>
+  
+  <Step title="Export CSV">
+    Download users with that genre preference
+  </Step>
+</Steps>
+
+### CSV output format
+
+Exported CSVs include:
+
+| Column | Description |
+|--------|-------------|
+| first_name | User first name (if collected) |
+| last_name | User last name (if collected) |
+| email | User email address |
+| source | Collection source (calendar_sync, email_signup, etc.) |
+| last_seen_at | Most recent engagement timestamp |
+| matched_rules | Number of rules matched |
+| total_rule_hits | Sum of hits across all matched rules |
+| rule_hit_breakdown | Detailed hit counts per rule |
+| match_operator | AND or OR logic used |
+| window_start_at | Analysis window start |
+| window_end_at | Analysis window end |
+
+## Export limits
+
+To maintain performance:
+
+- **Max window**: 365 days
+- **Max hits per rule**: 30
+- **Max limit**: 10,000 users per export
+
+Exports are sorted by total rule hits (descending), then email (ascending).
+
+## Adjusting the time window
+
+Change the analysis window in the dashboard controls:
+
+```text
+Window: [7 days] [30 days] [90 days] [365 days]
+```
+
+All metrics and exports use the selected window.
+
+## Email collection
+
+The Insights dashboard also shows collected email addresses from:
+
+- Calendar sync opt-ins
+- Newsletter signups
+- Event submission forms
+
+Export all emails or filter by source for targeted campaigns.
+
+## Postgres requirement
+
+<Warning>
+Analytics require a configured Postgres connection. If Postgres is unavailable, the dashboard shows:
+
+```text
+Postgres not configured
+```
+
+Verify Postgres connectivity in `/admin/operations`.
+</Warning>
+
+## Best practices
+
+- **Review weekly** to spot emerging trends
+- **Compare event performance** to optimize future placements
+- **Monitor outbound rates** to ensure partner satisfaction
+- **Use genre preferences** to curate genre-specific newsletters
+- **Export segments monthly** for email campaigns
+- **Track search patterns** to improve event metadata and titles
+- **Watch filter usage** to understand user discovery behavior
+- **Adjust time window** seasonally to capture relevant patterns

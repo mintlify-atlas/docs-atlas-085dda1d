@@ -1,0 +1,273 @@
+---
+title: Tracking endpoints
+description: Analytics APIs for tracking event engagement and discovery behavior
+---
+
+The tracking API enables OOOC Fête Finder to collect analytics on user interactions with events and discovery features. All endpoints return `202 Accepted` regardless of processing outcome to avoid blocking user interactions.
+
+## POST /api/track
+
+Tracks user engagement with specific events: clicks, outbound clicks, and calendar syncs.
+
+### Request body
+
+<ParamField body="eventKey" type="string" required>
+  Unique event identifier (1-220 characters)
+</ParamField>
+
+<ParamField body="actionType" type="string" required>
+  Type of engagement action:
+  - `click`: User viewed event details
+  - `outbound_click`: User clicked external event link
+  - `calendar_sync`: User added event to calendar
+</ParamField>
+
+<ParamField body="sessionId" type="string">
+  Anonymous session identifier (max 120 characters)
+</ParamField>
+
+<ParamField body="source" type="string">
+  Traffic source or referrer (max 80 characters)
+</ParamField>
+
+<ParamField body="path" type="string">
+  Page path where action occurred (max 280 characters)
+</ParamField>
+
+### Response
+
+Always returns `202 Accepted` with:
+
+<ResponseField name="success" type="boolean" required>
+  Always `true`
+</ResponseField>
+
+### Rate limits
+
+- **IP-based**: 240 requests per minute per IP
+- **Session-based**: 200 requests per minute per session (when `sessionId` provided)
+
+<Note>
+Unlike other endpoints, tracking endpoints do not return error responses when rate limited. Instead, they silently accept the request and return `202 Accepted` to avoid disrupting user experience.
+</Note>
+
+### Validation
+
+The endpoint validates that:
+- The `eventKey` exists in the live events catalog (cached for 5 minutes)
+- All request parameters match the expected schema
+
+Invalid requests are silently accepted without recording analytics data.
+
+### Authentication
+
+Authentication is optional. If the user has a valid session cookie (`oooc_user_session`), the engagement is recorded as authenticated.
+
+### Examples
+
+<CodeGroup>
+
+```javascript Track event view
+const response = await fetch('/api/track', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    eventKey: 'jazz-sunset-2026-03-15',
+    actionType: 'click',
+    sessionId: 'anon_abc123',
+    source: 'homepage',
+    path: '/events/jazz-sunset-2026-03-15'
+  })
+});
+
+const data = await response.json();
+// { "success": true }
+// Status: 202
+```
+
+```javascript Track outbound click
+const response = await fetch('/api/track', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    eventKey: 'jazz-sunset-2026-03-15',
+    actionType: 'outbound_click',
+    sessionId: 'anon_abc123'
+  })
+});
+
+const data = await response.json();
+// { "success": true }
+// Status: 202
+```
+
+```javascript Track calendar sync
+const response = await fetch('/api/track', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    eventKey: 'jazz-sunset-2026-03-15',
+    actionType: 'calendar_sync',
+    sessionId: 'anon_abc123',
+    path: '/events/jazz-sunset-2026-03-15'
+  })
+});
+
+const data = await response.json();
+// { "success": true }
+// Status: 202
+```
+
+</CodeGroup>
+
+---
+
+## POST /api/track/discovery
+
+Tracks user discovery behavior: searches, filter applications, and filter clears.
+
+### Request body
+
+<ParamField body="actionType" type="string" required>
+  Type of discovery action:
+  - `search`: User performed a search
+  - `filter_apply`: User applied a filter
+  - `filter_clear`: User cleared a filter
+</ParamField>
+
+<ParamField body="sessionId" type="string">
+  Anonymous session identifier (max 120 characters)
+</ParamField>
+
+<ParamField body="filterGroup" type="string">
+  Filter category being applied/cleared (max 80 characters)
+  
+  Valid values: `date_range`, `day_night`, `arrondissement`, `genre`, `nationality`, `venue_type`, `venue_setting`, `oooc_pick`, `price_range`, `age_range`
+</ParamField>
+
+<ParamField body="filterValue" type="string">
+  Specific filter value selected (max 120 characters)
+</ParamField>
+
+<ParamField body="searchQuery" type="string">
+  Search query text (max 280 characters, minimum 2 characters)
+</ParamField>
+
+<ParamField body="path" type="string">
+  Page path where action occurred (max 280 characters)
+</ParamField>
+
+### Response
+
+Always returns `202 Accepted` with:
+
+<ResponseField name="success" type="boolean" required>
+  Always `true`
+</ResponseField>
+
+### Rate limits
+
+- **IP-based**: 180 requests per minute per IP
+- **Session-based**: 150 requests per minute per session (when `sessionId` provided)
+
+### Validation
+
+The endpoint validates:
+- For `filter_apply`: `filterGroup` must be a known filter category and `filterValue` must not be empty
+- For `search`: `searchQuery` must be at least 2 characters
+
+Invalid requests are silently accepted without recording analytics data.
+
+### Authentication
+
+Authentication is optional. If the user has a valid session cookie, the action is associated with their email and marked as authenticated.
+
+### Examples
+
+<CodeGroup>
+
+```javascript Track search
+const response = await fetch('/api/track/discovery', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    actionType: 'search',
+    searchQuery: 'jazz concerts',
+    sessionId: 'anon_abc123',
+    path: '/discover'
+  })
+});
+
+const data = await response.json();
+// { "success": true }
+// Status: 202
+```
+
+```javascript Track filter application
+const response = await fetch('/api/track/discovery', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    actionType: 'filter_apply',
+    filterGroup: 'genre',
+    filterValue: 'jazz',
+    sessionId: 'anon_abc123',
+    path: '/discover'
+  })
+});
+
+const data = await response.json();
+// { "success": true }
+// Status: 202
+```
+
+```javascript Track filter clear
+const response = await fetch('/api/track/discovery', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    actionType: 'filter_clear',
+    filterGroup: 'arrondissement',
+    sessionId: 'anon_abc123',
+    path: '/discover'
+  })
+});
+
+const data = await response.json();
+// { "success": true }
+// Status: 202
+```
+
+</CodeGroup>
+
+---
+
+## Key characteristics
+
+<Expandable title="Why tracking endpoints always return 202">
+Tracking endpoints are designed to never block or fail from the user's perspective. They return `202 Accepted` immediately regardless of:
+
+- Whether the database is available
+- Whether rate limits are exceeded
+- Whether the request payload is valid
+- Whether the event or filter exists
+
+This ensures that analytics collection never impacts user experience. Invalid or rate-limited requests are simply ignored on the server side.
+</Expandable>
+
+<Expandable title="Event key caching">
+The `/api/track` endpoint caches the list of valid event keys for 5 minutes to avoid database queries on every tracking request. This means:
+
+- Newly created events may not be trackable for up to 5 minutes
+- Deleted events may still accept tracking data for up to 5 minutes
+- High-traffic scenarios benefit from reduced database load
+</Expandable>
+
+<Expandable title="Session tracking">
+Both tracking endpoints support optional `sessionId` parameters for session-based analytics:
+
+- Generate a unique session ID on the client (e.g., using UUID)
+- Include it in all tracking requests during the user's visit
+- Session-based rate limits prevent abuse while allowing legitimate high-frequency tracking
+- Session data can be used to calculate unique visitor metrics
+</Expandable>

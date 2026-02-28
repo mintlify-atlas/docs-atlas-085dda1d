@@ -1,0 +1,276 @@
+---
+title: Authentication model
+description: JWT-based authentication system with dual-level access control
+---
+
+OOOC Fête Finder implements a dual-tier authentication system: user authentication for content access and admin authentication for administrative functions.
+
+## User authentication
+
+User authentication is email-based and uses JWT tokens stored in HTTP-only cookies.
+
+### Authentication flow
+
+1. **User submits email** via `POST /api/auth/verify`
+2. **Server validates** email format and rate limits
+3. **User record created/updated** in user collection store
+4. **JWT token generated** and signed with `AUTH_SECRET`
+5. **Cookie set** with HTTP-only flag
+
+### User session token
+
+User sessions are signed JWT tokens with the following structure:
+
+```typescript
+interface UserSessionPayload {
+  email: string;
+  v: 1; // Token version
+  iat: number; // Issued at
+  exp: number; // Expires at
+  aud: 'oooc-fete-finder:user';
+  iss: 'oooc-fete-finder';
+}
+```
+
+<ParamField path="Algorithm" type="HS256">
+  HMAC-SHA256 symmetric signing
+</ParamField>
+
+<ParamField path="TTL" type="30 days">
+  Tokens expire after 2,592,000 seconds (30 days)
+</ParamField>
+
+<ParamField path="Cookie name" type="oooc_user_session">
+  HTTP-only cookie with SameSite=lax
+</ParamField>
+
+See token signing in `features/auth/user-session-cookie.ts:32`.
+
+### Security requirements
+
+<Warning>
+  `AUTH_SECRET` must be at least 32 characters long. The application will throw an error on startup if this requirement is not met.
+</Warning>
+
+The secret is validated in `getUserAuthSecret()` at `features/auth/user-session-cookie.ts:17`.
+
+### Cookie configuration
+
+```typescript
+{
+  httpOnly: true,
+  secure: env.NODE_ENV === 'production',
+  sameSite: 'lax',
+  path: '/',
+  maxAge: 2592000 // 30 days in seconds
+}
+```
+
+<Info>
+  In production, cookies are restricted to HTTPS only (`secure: true`). In development, HTTP is allowed for local testing.
+</Info>
+
+See cookie options in `features/auth/user-session-cookie.ts:80`.
+
+### Session verification
+
+Session tokens are verified on each authenticated request:
+
+```typescript
+verifyUserSessionToken(token) {
+  jwt.verify(token, AUTH_SECRET, {
+    algorithms: ['HS256'],
+    audience: 'oooc-fete-finder:user',
+    issuer: 'oooc-fete-finder'
+  })
+}
+```
+
+See verification in `features/auth/user-session-cookie.ts:48`.
+
+### Logout
+
+Users can logout via `DELETE /api/auth/session`, which clears the session cookie by setting `maxAge: 0`.
+
+See logout implementation in `app/api/auth/session/route.ts:33`.
+
+## Admin authentication
+
+Admin authentication is more sophisticated, supporting multiple credential types and session management.
+
+### Credential types
+
+Admins can authenticate using three methods:
+
+<ParamField path="Admin key" type="X-Admin-Key header">
+  Direct key authentication using `ADMIN_KEY` environment variable
+</ParamField>
+
+<ParamField path="Bearer token" type="Authorization: Bearer <token>">
+  JWT bearer token for programmatic access
+</ParamField>
+
+<ParamField path="Session cookie" type="oooc-admin-auth cookie">
+  HTTP-only cookie for browser sessions
+</ParamField>
+
+See credential extraction in `features/auth/admin-auth-token.ts:263`.
+
+### Admin key authentication
+
+The simplest form of admin authentication:
+
+```bash
+X-Admin-Key: <ADMIN_KEY value>
+```
+
+<Note>
+  Admin key comparison uses constant-time comparison via `timingSafeEqual` to prevent timing attacks.
+</Note>
+
+See secure comparison in `features/auth/admin-auth-token.ts:55`.
+
+### Admin JWT sessions
+
+Admin sessions use JWT tokens with session tracking:
+
+```typescript
+interface AdminTokenPayload {
+  type: 'admin';
+  jti: string; // Unique session ID
+  tv: number;  // Token version (for revocation)
+  iat: number; // Issued at
+  exp: number; // Expires at
+  aud: 'admin-api';
+  iss: 'oooc-fete-finder';
+}
+```
+
+<ParamField path="Algorithm" type="HS256">
+  HMAC-SHA256 symmetric signing
+</ParamField>
+
+<ParamField path="TTL" type="1 hour">
+  Admin tokens expire after 3,600 seconds
+</ParamField>
+
+<ParamField path="JTI" type="UUID v4">
+  Unique session identifier for tracking and revocation
+</ParamField>
+
+See token signing in `features/auth/admin-auth-token.ts:319`.
+
+### Session tracking
+
+All admin sessions are tracked in either:
+- **Postgres:** `app_admin_sessions` table (preferred)
+- **KV Store:** Fallback for environments without Postgres
+
+Tracked metadata:
+
+```typescript
+interface AdminTokenSessionRecord {
+  jti: string;
+  tv: number;
+  iat: number;
+  exp: number;
+  ip: string;  // Client IP address
+  ua: string;  // User agent
+  status: 'active' | 'expired' | 'revoked' | 'invalidated';
+}
+```
+
+See session registration in `features/auth/admin-auth-token.ts:220`.
+
+### Token versioning
+
+Admin tokens include a version number (`tv`) that enables mass revocation:
+
+<Info>
+  Incrementing the global token version instantly invalidates all existing admin sessions. This is useful for security incidents or credential rotation.
+</Info>
+
+See version management in `features/auth/admin-auth-token.ts:112`.
+
+### Session revocation
+
+Admin sessions can be revoked in two ways:
+
+**Individual revocation:**
+```typescript
+revokeAdminSessionByJti(jti: string)
+```
+
+Marks a specific session as revoked. The revocation is stored in:
+- Postgres: `revoked_until` column in `app_admin_sessions`
+- KV Store: `admin-auth:revoked:{jti}` key
+
+See individual revocation in `features/auth/admin-auth-token.ts:659`.
+
+**Mass revocation:**
+```typescript
+revokeAllAdminSessions()
+```
+
+Increments the token version, instantly invalidating all sessions.
+
+See mass revocation in `features/auth/admin-auth-token.ts:692`.
+
+### Session cleanup
+
+Expired admin sessions are automatically cleaned up by a cron job:
+
+<ParamField path="Grace period" type="7 days">
+  Sessions are kept for 7 days after expiry for audit purposes
+</ParamField>
+
+<ParamField path="Cleanup window" type="exp + 604,800 seconds">
+  Only sessions expired beyond the grace window are deleted
+</ParamField>
+
+See cleanup in `features/auth/admin-auth-token.ts:626`.
+
+## Session status endpoint
+
+Check authentication status via `GET /api/auth/session`:
+
+```json
+{
+  "success": true,
+  "isAuthenticated": true,
+  "isAdminAuthenticated": false,
+  "email": "user@example.com"
+}
+```
+
+<Note>
+  This endpoint returns both user and admin authentication status in a single request.
+</Note>
+
+See session status in `app/api/auth/session/route.ts:10`.
+
+## Security best practices
+
+<Warning>
+  **Environment variables:**
+  - `AUTH_SECRET`: Must be at least 32 characters, randomly generated
+  - `ADMIN_KEY`: Strong, randomly generated key
+  - Never commit these values to source control
+</Warning>
+
+**Token security:**
+- All tokens use HMAC-SHA256 signing
+- Tokens include audience and issuer claims to prevent misuse
+- Tokens are validated on every request
+- Expired tokens are automatically rejected
+
+**Cookie security:**
+- HTTP-only flag prevents JavaScript access
+- SameSite=lax prevents CSRF attacks
+- Secure flag enforces HTTPS in production
+- Path restriction limits cookie scope
+
+**Rate limiting:**
+- Authentication endpoints are rate limited (see [rate limiting](/security/rate-limiting))
+- Failed attempts are tracked by IP and email combination
+- Prevents brute force and enumeration attacks

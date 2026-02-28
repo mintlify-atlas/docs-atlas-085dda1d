@@ -1,0 +1,374 @@
+---
+title: Scripts
+description: Available npm/pnpm scripts for development, testing, and operations
+---
+
+This page documents all available scripts in the OOOC Fête Finder project. All commands use `pnpm` as the package manager.
+
+## Development
+
+### Start development server
+
+```bash
+pnpm dev
+```
+
+Starts Next.js development server with Turbopack for faster builds.
+
+- **Port**: Default 3000
+- **Hot reload**: Enabled
+- **Turbopack**: Optimized bundler for development
+
+### Build production bundle
+
+```bash
+pnpm build
+```
+
+Creates an optimized production build using Webpack.
+
+<Note>
+The build uses `--webpack` flag explicitly. Turbopack is used only for development.
+</Note>
+
+### Start production server
+
+```bash
+pnpm start
+```
+
+Starts the Next.js production server. Requires a successful `pnpm build` first.
+
+## Testing
+
+### Run all tests
+
+```bash
+pnpm test
+```
+
+Runs the full test suite once using Vitest. Tests include:
+
+- Unit tests in `__tests__/unit/`
+- Integration tests in `__tests__/integration/`
+- Coverage tracked for data management, Postgres, and auth features
+
+### Watch mode
+
+```bash
+pnpm test:watch
+```
+
+Runs tests in watch mode. Tests automatically re-run when files change.
+
+<Info>
+Watch mode is ideal during active development. It provides immediate feedback on test failures.
+</Info>
+
+### Coverage report
+
+```bash
+pnpm test:coverage
+```
+
+Generates test coverage reports using v8 provider. Output includes:
+
+- Text summary in terminal
+- HTML report in `coverage/` directory
+
+Coverage includes:
+- `features/data-management/**/*.ts`
+- `lib/platform/postgres/**/*.ts`
+- `features/auth/**/*.ts`
+
+## Code Quality
+
+### Linting
+
+<CodeGroup>
+```bash Check for issues
+pnpm lint
+```
+
+```bash Auto-fix issues
+pnpm lint:fix
+```
+</CodeGroup>
+
+Uses Biome for fast linting. The `lint:fix` variant automatically fixes auto-fixable issues.
+
+### Formatting
+
+```bash
+pnpm format
+```
+
+Formats all files using Biome's formatter with automatic write.
+
+### Combined fix
+
+```bash
+pnpm fix
+```
+
+Runs Biome check with `--write` flag to:
+- Lint and auto-fix issues
+- Format code
+- Apply safe fixes
+
+<Warning>
+Always commit your changes before running `pnpm fix` to review automatic modifications.
+</Warning>
+
+## Dead Code Detection
+
+### Find unused exports
+
+<CodeGroup>
+```bash Knip analysis
+pnpm deadcode
+```
+
+```bash ts-prune analysis
+pnpm deadcode:exports
+```
+
+```bash Run both
+pnpm deadcode:all
+```
+</CodeGroup>
+
+**Knip** finds unused files, dependencies, and exports across the project.
+
+**ts-prune** focuses specifically on unused exports, excluding `.next/` build artifacts.
+
+## Database Operations
+
+### Bootstrap Postgres store
+
+```bash
+pnpm bootstrap:postgres-store
+```
+
+Initializes the Postgres event store schema and seeds initial data.
+
+**What it does:**
+- Creates `app_kv_store` table
+- Creates `app_event_store_columns` table
+- Creates `app_event_store_rows` table
+- Creates `app_event_store_meta` table
+- Creates `app_event_store_settings` table
+- Seeds data from `data/events.csv` or legacy KV store
+- Initializes users collection
+
+<Info>
+This script is safe to run multiple times. It checks for existing data and skips seeding if tables already contain rows.
+</Info>
+
+**Script location:** `scripts/bootstrap-postgres-store.mjs`
+
+### Seed featured schedule
+
+```bash
+pnpm bootstrap:featured-schedule
+```
+
+Migrates legacy `Featured` column values from event rows into the dedicated `app_featured_event_schedule` table.
+
+**What it does:**
+- Creates `app_featured_event_schedule` table
+- Extracts events with non-empty `featured` values
+- Inserts schedule entries (skips existing)
+- Recomputes effective start/end times using queue allocation
+
+**Queue allocation:**
+- Max 3 concurrent featured events
+- Default duration: 48 hours
+- Allocates slots to minimize overlap
+
+**Script location:** `scripts/seed-featured-schedule-from-legacy.mjs`
+
+### Database CLI
+
+```bash
+pnpm db:cli
+```
+
+Interactive CLI for inspecting database state.
+
+<Accordion title="Available commands">
+
+**status**  
+Shows Postgres connectivity, KV key counts, and event table row counts.
+
+**keys [prefix] [limit]**  
+Lists keys from `app_kv_store`. Optionally filter by prefix and limit results (default: 100, max: 500).
+
+**get \<key\>**  
+Fetches and displays the value for a specific KV key.
+
+**rows**  
+Compares row counts between legacy KV CSV and event tables to verify migration integrity.
+
+**sample [count]**  
+Prints random event rows from the table store (or legacy KV CSV if tables are empty). Default count: 2, max: 20.
+
+**health [baseUrl]**  
+Calls `/api/admin/health` endpoint. Requires `ADMIN_KEY` environment variable.
+
+**help**  
+Shows usage information.
+
+</Accordion>
+
+**Interactive mode:**
+```bash
+pnpm db:cli
+# Launches interactive prompt
+db> status
+db> sample 5
+db> exit
+```
+
+**Single command mode:**
+```bash
+pnpm db:cli -- status
+pnpm db:cli -- keys events-store: 20
+pnpm db:cli -- get events-store:csv
+```
+
+**Script location:** `scripts/db-cli.mjs`
+
+## Diagnostics
+
+### CSV structure diagnosis
+
+```bash
+pnpm csv:diagnose -- --remote
+```
+
+Analyzes CSV structure from remote sources to identify row/column mismatches.
+
+<CodeGroup>
+```bash Remote CSV (env config)
+pnpm csv:diagnose -- --remote
+```
+
+```bash Specific URL
+pnpm csv:diagnose -- --url "https://docs.google.com/spreadsheets/d/.../"
+```
+
+```bash Local file
+pnpm csv:diagnose -- --file data/events.csv
+```
+
+```bash Limit output
+pnpm csv:diagnose -- --remote --limit 10
+```
+</CodeGroup>
+
+**Detects:**
+- Rows with extra columns (unquoted commas)
+- Rows with missing columns (line breaks inside cells)
+- Parser errors
+
+**Output includes:**
+- Header column count
+- Total data rows
+- Mismatch count and breakdown
+- Row previews for first N mismatches
+
+**Fetch strategies:**
+1. Public URL (from `REMOTE_CSV_URL` or explicit `--url`)
+2. Google Sheets API (requires `GOOGLE_SERVICE_ACCOUNT_KEY`)
+
+**Script location:** `scripts/csv-structure-diagnose.mjs`
+
+### Health check
+
+```bash
+pnpm health:check
+```
+
+Verifies database connectivity and admin API health.
+
+**Checks:**
+- Postgres connection
+- KV store keys and timestamps
+- Legacy CSV row counts (if present)
+- Event table row counts
+- Table/metadata alignment
+- Admin health endpoint (`/api/admin/health`)
+- Postgres KV endpoint (`/api/admin/postgres/kv`)
+
+**Environment requirements:**
+- `DATABASE_URL` (required)
+- `ADMIN_KEY` (optional, for API checks)
+- `BASE_URL` (optional, defaults to `http://localhost:3000`)
+
+**Script location:** `scripts/health-check.mjs`
+
+## Type Checking
+
+While not in `package.json` scripts, you can run TypeScript type checking:
+
+```bash
+pnpm exec tsc --noEmit
+```
+
+Checks for type errors without emitting build output.
+
+## Environment Setup
+
+Before running scripts, ensure you have:
+
+1. **Required environment variables:**
+   - `AUTH_SECRET` (32+ character random string)
+   - `DATABASE_URL` (Postgres connection string)
+   - `DATA_MODE=remote` (for production)
+
+2. **Optional for Google integrations:**
+   - `REMOTE_CSV_URL`
+   - `GOOGLE_SHEET_ID`
+   - `GOOGLE_SERVICE_ACCOUNT_KEY`
+   - `GOOGLE_MAPS_API_KEY`
+
+See [Environment Variables](/reference/environment-variables) for complete reference.
+
+## Script Execution Flow
+
+Typical first-time setup:
+
+```bash
+# 1. Install dependencies
+pnpm install
+
+# 2. Bootstrap database
+pnpm bootstrap:postgres-store
+
+# 3. Migrate featured schedule (if needed)
+pnpm bootstrap:featured-schedule
+
+# 4. Verify health
+pnpm health:check
+
+# 5. Start development
+pnpm dev
+```
+
+Pre-deployment checks:
+
+```bash
+# Run tests
+pnpm test
+
+# Check code quality
+pnpm fix
+pnpm lint
+
+# Type check
+pnpm exec tsc --noEmit
+
+# Build production bundle
+pnpm build
+```

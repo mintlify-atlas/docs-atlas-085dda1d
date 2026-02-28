@@ -1,0 +1,481 @@
+---
+title: Serverless runtime hardening
+description: Production security and reliability policies for Vercel deployment
+---
+
+## Overview
+
+This runbook defines production and preview runtime policies for OOOC Fête Finder on Vercel. These policies ensure secure, reliable operation in ephemeral serverless environments.
+
+## Runtime policy
+
+OOOC Fête Finder enforces the following runtime rules:
+
+<Steps>
+  <Step title="PostgreSQL-backed storage">
+    KV/runtime store in deployed serverless environments must be PostgreSQL-backed. File system storage is not persistent and must not be relied upon for event or coordinate data.
+  </Step>
+  
+  <Step title="Database health">
+    `DATABASE_URL` must be healthy and accessible from all serverless functions. Application startup validates database connectivity.
+  </Step>
+  
+  <Step title="Token-protected endpoints">
+    Cron routes and deploy revalidation routes must be token-protected using environment variable secrets.
+  </Step>
+  
+  <Step title="No disk persistence">
+    Runtime disk persistence is not relied on for event or coordinate storage. All data persists in PostgreSQL.
+  </Step>
+</Steps>
+
+## Data mode configuration
+
+The application operates in one of three modes:
+
+```typescript
+// Environment: DATA_MODE
+type DataMode = "remote" | "local" | "test";
+```
+
+### Remote mode (production)
+
+```bash
+DATA_MODE=remote
+DATABASE_URL=postgresql://...
+```
+
+- Primary source: PostgreSQL event store
+- Fallback source: Local CSV (`data/events.csv`) if store read fails
+- Google Sheets: Admin backup/preview only
+- **Required for production/preview environments**
+
+### Local mode (development)
+
+```bash
+DATA_MODE=local
+```
+
+- Primary source: Local CSV (`data/events.csv`)
+- No database required
+- Useful for offline development
+- **Never use in production**
+
+<Warning>
+  Local mode is for development only. Deployed environments must use `DATA_MODE=remote`.
+</Warning>
+
+### Test mode
+
+```bash
+DATA_MODE=test
+```
+
+- Uses in-memory mock data
+- No external dependencies
+- Used by test suite
+
+## Event and revalidation flow
+
+The application follows this data flow in production:
+
+<Steps>
+  <Step title="Live reads">
+    `runtime-service` → `DataManager` → PostgreSQL event store
+    
+    ```typescript
+    // features/data-management/runtime-service.ts
+    export const getEventsData = cache(async () => {
+      return await DataManager.getProcessedEvents();
+    });
+    ```
+  </Step>
+  
+  <Step title="Homepage publish">
+    Admin saves events → PostgreSQL → Revalidate path/tag
+    
+    ```typescript
+    // Admin panel: "Save and Revalidate Homepage"
+    await LocalEventStore.saveCsv(csv);
+    await forceRefreshEventsData();
+    revalidatePath("/");
+    revalidateTag("events-data");
+    ```
+  </Step>
+  
+  <Step title="Deploy hook revalidation">
+    Deploy completes → Webhook → `POST /api/revalidate/deploy`
+    
+    Requires `Authorization: Bearer <DEPLOY_REVALIDATE_SECRET>`
+  </Step>
+</Steps>
+
+## Cron endpoints
+
+Configured in `vercel.json`:
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/cleanup-admin-sessions", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/cleanup-rate-limits", "schedule": "10 4 * * *" },
+    { "path": "/api/cron/backup-event-store", "schedule": "20 4 * * *" }
+  ]
+}
+```
+
+### Cleanup admin sessions
+
+**Endpoint**: `GET /api/cron/cleanup-admin-sessions`  
+**Schedule**: Daily at 04:00 UTC  
+**Purpose**: Remove expired admin authentication sessions
+
+```bash
+curl https://your-domain.com/api/cron/cleanup-admin-sessions \
+  -H "Authorization: Bearer <CRON_SECRET>"
+```
+
+### Cleanup rate limits
+
+**Endpoint**: `GET /api/cron/cleanup-rate-limits`  
+**Schedule**: Daily at 04:10 UTC  
+**Purpose**: Prune expired rate limit buckets from KV store
+
+```bash
+curl https://your-domain.com/api/cron/cleanup-rate-limits \
+  -H "Authorization: Bearer <CRON_SECRET>"
+```
+
+### Backup event store
+
+**Endpoint**: `GET /api/cron/backup-event-store`  
+**Schedule**: Daily at 04:20 UTC  
+**Purpose**: Create automatic snapshot of event store and featured schedule
+
+```bash
+curl https://your-domain.com/api/cron/backup-event-store \
+  -H "Authorization: Bearer <CRON_SECRET>"
+```
+
+<Info>
+  All cron endpoints require `Authorization: Bearer <CRON_SECRET>` header. Set `CRON_SECRET` in both Preview and Production environments.
+</Info>
+
+## Deploy revalidation endpoint
+
+**Endpoint**: `POST /api/revalidate/deploy` (or `GET`)  
+**Purpose**: Invalidate cache after deployments
+
+```bash
+curl -X POST https://your-domain.com/api/revalidate/deploy \
+  -H "Authorization: Bearer <DEPLOY_REVALIDATE_SECRET>"
+```
+
+Response on success:
+```json
+{
+  "success": true,
+  "message": "Events data refreshed",
+  "count": 123,
+  "source": "postgres-store"
+}
+```
+
+### Configure webhook
+
+<Steps>
+  <Step title="Add secret to environment">
+    Generate and add `DEPLOY_REVALIDATE_SECRET`:
+    ```bash
+    openssl rand -base64 48
+    ```
+  </Step>
+  
+  <Step title="Create Vercel Deploy Hook">
+    Project Settings > Git > Deploy Hooks > Create Hook
+    - Name: "Post-Deploy Revalidate"
+    - Branch: "main"
+  </Step>
+  
+  <Step title="Configure webhook in CI/CD">
+    After successful deploy, call:
+    ```bash
+    curl -X POST "https://your-domain.com/api/revalidate/deploy" \
+      -H "Authorization: Bearer $DEPLOY_REVALIDATE_SECRET"
+    ```
+  </Step>
+</Steps>
+
+## Security hardening
+
+### Environment variable validation
+
+The application validates required variables at startup:
+
+```typescript
+// lib/env.ts (using @t3-oss/env-nextjs)
+import { createEnv } from "@t3-oss/env-nextjs";
+import { z } from "zod";
+
+export const env = createEnv({
+  server: {
+    DATABASE_URL: z.string().url(),
+    AUTH_SECRET: z.string().min(32),
+    DATA_MODE: z.enum(["remote", "local", "test"]),
+    CRON_SECRET: z.string().optional(),
+    DEPLOY_REVALIDATE_SECRET: z.string().optional(),
+  },
+  runtimeEnv: process.env,
+});
+```
+
+If validation fails, the application will not start.
+
+### Cron authentication
+
+All cron routes verify the bearer token:
+
+```typescript
+// app/api/cron/*/route.ts
+export async function GET(request: NextRequest) {
+  const secret = process.env.CRON_SECRET?.trim();
+  const auth = request.headers.get("authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  
+  if (!secret || token !== secret) {
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401 }
+    );
+  }
+  
+  // Process cron job...
+}
+```
+
+<Warning>
+  Never expose `CRON_SECRET` or `DEPLOY_REVALIDATE_SECRET` in client-side code or logs.
+</Warning>
+
+### Admin authentication
+
+Admin endpoints require `x-admin-key` header:
+
+```typescript
+// Admin route protection
+const adminKey = request.headers.get("x-admin-key");
+const expectedKey = process.env.ADMIN_KEY?.trim();
+
+if (!expectedKey || adminKey !== expectedKey) {
+  return new Response("Unauthorized", { status: 401 });
+}
+```
+
+### Rate limiting
+
+Public endpoints use in-memory rate limiting:
+
+```typescript
+// Rate limit: 100 requests per 15 minutes per IP
+const rateLimit = {
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+};
+```
+
+## Node runtime enforcement
+
+Some routes require Node.js runtime (not Edge):
+
+```typescript
+// app/api/revalidate/deploy/route.ts
+export const runtime = "nodejs";
+
+// Required for:
+// - Database connections (postgres package)
+// - File system access
+// - Crypto operations
+```
+
+<Info>
+  Edge Runtime is faster but has limitations. Use Node runtime for routes that need full Node.js APIs.
+</Info>
+
+## Failure checks
+
+If runtime errors appear in preview/production:
+
+<Steps>
+  <Step title="Verify DATABASE_URL">
+    Confirm `DATABASE_URL` exists in **both** Preview and Production environments in Vercel dashboard.
+  </Step>
+  
+  <Step title="Verify DATA_MODE">
+    Confirm `DATA_MODE=remote` is explicitly set (not relying on default).
+  </Step>
+  
+  <Step title="Verify secrets">
+    Confirm `CRON_SECRET` and `DEPLOY_REVALIDATE_SECRET` are set where needed:
+    ```bash
+    # Check via Vercel CLI
+    vercel env ls
+    ```
+  </Step>
+  
+  <Step title="Check runtime configuration">
+    Verify route handlers use Node runtime where expected:
+    ```typescript
+    export const runtime = "nodejs";
+    ```
+  </Step>
+  
+  <Step title="Review logs">
+    Check Vercel function logs for specific error messages:
+    ```
+    Vercel Dashboard > Deployments > [Select deployment] > Logs
+    ```
+  </Step>
+</Steps>
+
+## Cache control headers
+
+The application sets appropriate cache headers:
+
+### API routes (no caching)
+
+```typescript
+// lib/http/cache-control.ts
+export const NO_STORE_HEADERS = {
+  "Cache-Control": "private, no-cache, no-store, must-revalidate",
+  "Pragma": "no-cache",
+  "Expires": "0",
+};
+```
+
+Used for:
+- Admin endpoints
+- Cron jobs
+- Revalidation endpoints
+- User session endpoints
+
+### OG image route (aggressive caching)
+
+```json vercel.json
+{
+  "headers": [
+    {
+      "source": "/api/og",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "s-maxage=86400, stale-while-revalidate=604800"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Caches for:
+- 24 hours fresh (s-maxage=86400)
+- 7 days stale-while-revalidate
+
+## Monitoring and alerts
+
+### Health check script
+
+Run comprehensive diagnostics:
+
+```bash
+DATABASE_URL="your-url" \
+ADMIN_KEY="your-key" \
+BASE_URL="https://your-domain.com" \
+pnpm health:check
+```
+
+Outputs:
+- PostgreSQL connectivity
+- KV store key count
+- Event table row counts
+- Admin health endpoint response
+- Postgres KV endpoint response
+
+### Vercel metrics
+
+Monitor in Vercel dashboard:
+- Function execution duration
+- Function error rate
+- Function invocation count
+- Edge cache hit ratio
+- Bandwidth usage
+
+### Custom logging
+
+The application logs key events:
+
+```typescript
+// lib/platform/logger.ts
+import { log } from "@/lib/platform/logger";
+
+log.info("cache", "Events loaded", { source: "store", count: 123 });
+log.warn("geocoding", "Using fallback (API unavailable)");
+log.error("database", "Connection failed", undefined, error);
+```
+
+See [Logging and observability](/operations/logging) for details.
+
+## Disaster recovery
+
+In case of critical failure:
+
+<Steps>
+  <Step title="Emergency fallback to local mode">
+    **Only as last resort:**
+    ```bash
+    # Temporarily set DATA_MODE=local
+    # Ensure data/events.csv is current
+    # This bypasses database entirely
+    ```
+  </Step>
+  
+  <Step title="Restore from backup">
+    1. Navigate to `/admin/operations`
+    2. Restore latest backup or selected snapshot
+    3. Revalidate homepage
+    4. Verify runtime source
+  </Step>
+  
+  <Step title="Database recovery">
+    If database is corrupted:
+    ```bash
+    # Re-bootstrap from local CSV
+    DATABASE_URL="your-url" pnpm bootstrap:postgres-store
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Setting `DATA_MODE=local` in production is an emergency measure only. Restore `DATA_MODE=remote` as soon as possible.
+</Warning>
+
+## Production checklist
+
+Before going live, verify:
+
+- [ ] `DATA_MODE=remote` in Production and Preview
+- [ ] `DATABASE_URL` set and tested
+- [ ] `AUTH_SECRET` is at least 32 characters
+- [ ] `ADMIN_KEY` is set and documented
+- [ ] `CRON_SECRET` is set and matches Vercel cron config
+- [ ] All three cron jobs are registered in Vercel
+- [ ] Deploy revalidation webhook is configured
+- [ ] Health check script runs successfully
+- [ ] Backup cron job has executed at least once
+- [ ] Admin panel is accessible and shows healthy status
+- [ ] Homepage loads events from PostgreSQL (check runtime source)
+
+## Next steps
+
+- [Configure logging](/operations/logging) for production monitoring
+- [Set up backups](/operations/backup-recovery) for disaster recovery
+- [Deploy to production](/operations/deployment) with confidence

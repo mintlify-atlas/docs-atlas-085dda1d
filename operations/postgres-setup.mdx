@@ -1,0 +1,551 @@
+---
+title: PostgreSQL setup
+description: Configure and optimize PostgreSQL for OOOC Fête Finder
+---
+
+## Overview
+
+OOOC Fête Finder uses PostgreSQL as the primary data store for events, user sessions, rate limits, and backups. This guide covers database setup, schema initialization, and optimization.
+
+## Database schema
+
+The application uses five main tables:
+
+### Key-value store
+
+```sql
+CREATE TABLE app_kv_store (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Stores:
+- User sessions (`users:collection:v1`)
+- Rate limit buckets
+- Legacy event metadata (migration support)
+
+### Event store columns
+
+```sql
+CREATE TABLE app_event_store_columns (
+  key TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  is_core BOOLEAN NOT NULL,
+  is_required BOOLEAN NOT NULL,
+  display_order INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Defines the event sheet schema with:
+- Core columns: `title`, `date`, `location`, `categories`, etc.
+- Custom columns: User-defined fields
+- Display order: Column ordering in admin UI
+
+### Event store rows
+
+```sql
+CREATE TABLE app_event_store_rows (
+  id TEXT PRIMARY KEY,
+  display_order INTEGER NOT NULL,
+  row_data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Stores event data as JSONB for:
+- Flexible schema evolution
+- Fast JSON queries
+- Efficient indexing
+
+### Event store metadata
+
+```sql
+CREATE TABLE app_event_store_meta (
+  singleton BOOLEAN PRIMARY KEY DEFAULT TRUE,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by TEXT NOT NULL DEFAULT 'system',
+  origin TEXT NOT NULL DEFAULT 'manual',
+  checksum TEXT NOT NULL DEFAULT ''
+);
+```
+
+Tracks:
+- Total row count
+- Last update timestamp and author
+- Data origin (`manual`, `google-sheet`, `csv-upload`)
+- SHA-256 checksum (first 16 chars)
+
+### Event store settings
+
+```sql
+CREATE TABLE app_event_store_settings (
+  singleton BOOLEAN PRIMARY KEY DEFAULT TRUE,
+  auto_sync_from_google BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Configuration for:
+- Auto-sync from Google Sheets
+- Future store-level settings
+
+## Initial setup
+
+<Steps>
+  <Step title="Create database">
+    Create a PostgreSQL database with your provider:
+    
+    <CodeGroup>
+    ```bash Vercel Postgres
+    # From Vercel dashboard:
+    # Storage > Create Database > Postgres
+    # Copy DATABASE_URL to environment variables
+    ```
+    
+    ```bash Neon
+    # From Neon console:
+    # Projects > New Project
+    # Copy connection string to DATABASE_URL
+    ```
+    
+    ```bash Supabase
+    # From Supabase dashboard:
+    # Database Settings > Connection String
+    # Use Transaction pooler URL for DATABASE_URL
+    ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Bootstrap tables">
+    Run the bootstrap script to initialize schema:
+    
+    ```bash
+    DATABASE_URL="your-connection-string" pnpm bootstrap:postgres-store
+    ```
+    
+    The script will:
+    - Create all required tables if they don't exist
+    - Migrate legacy KV data to new event tables
+    - Seed from `data/events.csv` if tables are empty
+    - Initialize user collection
+    - Report final row counts
+  </Step>
+  
+  <Step title="Verify tables">
+    Check that all tables were created:
+    
+    ```bash
+    DATABASE_URL="your-connection-string" pnpm db:cli status
+    ```
+    
+    Expected output:
+    ```
+    Postgres status
+    - table: app_kv_store
+    - key count: 1
+    - event table rows: 123
+    - event table columns: 17
+    - event tables/meta aligned: yes
+    ```
+  </Step>
+</Steps>
+
+## Bootstrap script details
+
+The `bootstrap-postgres-store.mjs` script handles:
+
+### Table creation
+
+- Creates `app_kv_store` if missing
+- Creates event store tables if missing
+- Uses `CREATE TABLE IF NOT EXISTS` for idempotency
+
+### Legacy migration
+
+```javascript
+// Checks for legacy events-store:csv key
+const legacyCsv = await getKey("events-store:csv");
+if (legacyCsv && legacyCsv.trim().length > 0) {
+  // Migrates to new table structure
+  // Sets origin = "legacy-kv-import"
+  // Removes old KV keys after migration
+}
+```
+
+### CSV seeding
+
+If no legacy data exists and tables are empty:
+
+```javascript
+// Reads data/events.csv
+const csvPath = path.join(process.cwd(), "data", "events.csv");
+const csvRaw = await readFile(csvPath, "utf8");
+
+// Parses CSV and normalizes headers
+const sheet = toSheet(sanitizeCsv(csvRaw));
+
+// Inserts columns and rows in transaction
+// Sets origin = "local-file-import"
+```
+
+### Core column mapping
+
+The script maps CSV headers to core fields:
+
+```javascript
+const CORE_COLUMN_LABELS = {
+  eventKey: "Event Key",
+  curated: "Curated",
+  hostCountry: "Host Country",
+  audienceCountry: "Audience Country",
+  title: "Title",
+  date: "Date",
+  startTime: "Start Time",
+  endTime: "End Time",
+  location: "Location",
+  districtArea: "District/Area",
+  categories: "Categories",
+  tags: "Tags",
+  price: "Price",
+  primaryUrl: "Primary URL",
+  ageGuidance: "Age Guidance",
+  setting: "Setting",
+  notes: "Notes"
+};
+```
+
+<Note>
+  Headers are normalized using `normalizeKey()` which converts to lowercase, replaces non-alphanumeric with underscores, and truncates to 64 characters.
+</Note>
+
+## Database CLI
+
+The `db:cli` script provides interactive database inspection:
+
+### Interactive mode
+
+```bash
+DATABASE_URL="your-connection-string" pnpm db:cli
+```
+
+Available commands:
+
+<CodeGroup>
+```bash status
+db> status
+
+Postgres status
+- table: app_kv_store
+- key count: 3
+- has events meta: true
+- has events csv: false
+- events metadata rows: 123
+- event table rows: 123
+- event table columns: 17
+- event tables/meta aligned: yes
+```
+
+```bash keys
+db> keys events-store 10
+
+Keys (2)
+- events-store:meta (2026-02-28T10:30:00.000Z)
+- events-store:settings (2026-02-28T10:30:00.000Z)
+```
+
+```bash get
+db> get events-store:meta
+
+events-store:meta
+updated_at: 2026-02-28T10:30:00.000Z
+{"rowCount":123,"updatedAt":"2026-02-28T10:30:00.000Z","origin":"manual"}
+```
+
+```bash rows
+db> rows
+
+Events row diagnostics
+- legacy KV metadata rowCount: 0
+- legacy KV raw CSV row count: 0
+- legacy KV counts match: yes
+- table rows count: 123
+- table meta row_count: 123
+- table counts match: yes
+```
+
+```bash sample
+db> sample 3
+
+Random sample (3 rows)
+Title | Date | Location | Categories | Tags
+Live Jazz at Blue Note | 2026-03-15 | 6 Rue de l'Arbre Sec, 75001 Paris | Music | jazz,live,evening
+Art Exhibition Opening | 2026-03-20 | Galerie Perrotin, 76 Rue de Turenne | Art | contemporary,gallery,opening
+Weekend Market | 2026-03-22 | Marché Bastille | Market | food,local,weekend
+```
+
+```bash health
+db> health http://localhost:3000
+
+=== Admin Health Endpoint ===
+{
+  "status": "healthy",
+  "database": "connected",
+  "dataMode": "remote",
+  "eventCount": 123
+}
+```
+</CodeGroup>
+
+### Direct command mode
+
+Run single commands without interactive prompt:
+
+```bash
+DATABASE_URL="your-connection-string" pnpm db:cli status
+DATABASE_URL="your-connection-string" pnpm db:cli keys
+DATABASE_URL="your-connection-string" pnpm db:cli sample 5
+```
+
+## Connection pooling
+
+The application uses the `postgres` npm package with configurable pooling:
+
+```javascript
+const sql = postgres(databaseUrl, {
+  prepare: false,           // Disable prepared statements
+  max: poolSize,            // Max connections (default: 1 dev, 3 prod)
+  idle_timeout: 20,         // Close idle connections after 20s
+  connect_timeout: 10,      // Connection timeout 10s
+  onnotice: () => {},       // Suppress NOTICE messages
+});
+```
+
+### Pool size configuration
+
+```bash
+# Override default pool size (bounded 1-10)
+POSTGRES_POOL_MAX=5
+```
+
+Recommended settings:
+- **Development**: `1` (default)
+- **Preview**: `2-3`
+- **Production**: `3-5` (default: 3)
+- **High traffic**: `5-10`
+
+<Warning>
+  Keep pool size low on serverless platforms. Each function instance maintains its own pool. With 10 concurrent functions and pool size 5, you'd have 50 database connections.
+</Warning>
+
+## Indexing strategy
+
+The default schema intentionally omits indexes to keep setup simple. For production optimization:
+
+### Recommended indexes
+
+```sql
+-- Speed up KV lookups by prefix
+CREATE INDEX idx_kv_key_prefix ON app_kv_store(key text_pattern_ops);
+
+-- Speed up event row ordering
+CREATE INDEX idx_event_rows_display_order ON app_event_store_rows(display_order);
+
+-- Speed up JSONB queries on common fields
+CREATE INDEX idx_event_rows_title ON app_event_store_rows 
+  USING gin ((row_data->'title'));
+
+CREATE INDEX idx_event_rows_date ON app_event_store_rows 
+  USING gin ((row_data->'date'));
+
+CREATE INDEX idx_event_rows_categories ON app_event_store_rows 
+  USING gin ((row_data->'categories'));
+```
+
+<Note>
+  Add indexes only if you observe slow queries. Start with the default schema and profile before optimizing.
+</Note>
+
+## Performance tuning
+
+### Query optimization
+
+The event store uses JSONB for flexible schema:
+
+```typescript
+// Efficient: Use JSONB operators
+const events = await sql`
+  SELECT row_data->>'title' as title,
+         row_data->>'date' as date
+  FROM app_event_store_rows
+  WHERE row_data->>'date' >= ${startDate}
+  ORDER BY display_order
+`;
+
+// Avoid: Deserializing all rows in application
+const allRows = await sql`SELECT * FROM app_event_store_rows`;
+const filtered = allRows.filter(r => parseDate(r.row_data.date) >= startDate);
+```
+
+### Connection management
+
+```typescript
+// Good: Reuse connection pool
+const sql = postgres(databaseUrl, poolConfig);
+
+// At application shutdown
+await sql.end({ timeout: 5 });
+
+// Bad: Creating new pools per request
+const sql = postgres(databaseUrl); // Creates new pool!
+```
+
+### Transaction usage
+
+Use transactions for multi-table operations:
+
+```typescript
+await sql.begin(async (tx) => {
+  await tx`DELETE FROM app_event_store_rows`;
+  await tx`DELETE FROM app_event_store_columns`;
+  
+  // Insert new data
+  for (const column of columns) {
+    await tx`INSERT INTO app_event_store_columns ...`;
+  }
+  for (const row of rows) {
+    await tx`INSERT INTO app_event_store_rows ...`;
+  }
+  
+  await tx`UPDATE app_event_store_meta SET row_count = ${rows.length}`;
+});
+```
+
+## Data consistency
+
+### Row count validation
+
+The application maintains consistency between actual rows and metadata:
+
+```bash
+# Check for mismatches
+pnpm db:cli rows
+
+# Expected output:
+# - table rows count: 123
+# - table meta row_count: 123
+# - table counts match: yes
+```
+
+If counts don't match, the admin panel will show warnings in runtime status.
+
+### Checksum verification
+
+Event data is checksummed for integrity:
+
+```typescript
+// SHA-256 checksum (first 16 chars)
+const checksum = (csvContent: string): string =>
+  createHash("sha256")
+    .update(csvContent)
+    .digest("hex")
+    .slice(0, 16);
+```
+
+Checksums are stored in:
+- `app_event_store_meta.checksum`
+- Backup snapshots
+- Admin audit logs
+
+## Troubleshooting
+
+### Connection failures
+
+```
+Error: connect ECONNREFUSED
+```
+
+<Steps>
+  <Step title="Verify DATABASE_URL">
+    Check the connection string format:
+    ```
+    postgresql://user:password@host:port/database?sslmode=require
+    ```
+  </Step>
+  
+  <Step title="Test direct connection">
+    ```bash
+    psql "$DATABASE_URL" -c "SELECT 1;"
+    ```
+  </Step>
+  
+  <Step title="Check firewall rules">
+    Ensure your serverless functions can reach the database host.
+  </Step>
+</Steps>
+
+### Table not found
+
+```
+Error: relation "app_kv_store" does not exist
+```
+
+Run the bootstrap script:
+```bash
+DATABASE_URL="your-connection-string" pnpm bootstrap:postgres-store
+```
+
+### Row count mismatch
+
+```
+Warning: table counts don't match
+- table rows count: 125
+- table meta row_count: 123
+```
+
+This indicates incomplete writes. From `/admin/operations`:
+1. Click "Save and Revalidate Homepage"
+2. Verify counts in "Live Runtime Snapshot"
+3. If needed, restore from a recent backup
+
+## Migrations
+
+The application uses schema-on-write for flexibility. For breaking changes:
+
+<Steps>
+  <Step title="Create backup">
+    ```bash
+    # Via admin panel: /admin/operations > Backup Now
+    # Or via API with proper authentication
+    ```
+  </Step>
+  
+  <Step title="Apply schema changes">
+    ```sql
+    -- Example: Add new column to app_event_store_columns
+    ALTER TABLE app_event_store_columns
+      ADD COLUMN is_hidden BOOLEAN DEFAULT FALSE;
+    ```
+  </Step>
+  
+  <Step title="Update application code">
+    Deploy code changes that work with new schema.
+  </Step>
+  
+  <Step title="Verify">
+    ```bash
+    DATABASE_URL="your-connection-string" pnpm db:cli status
+    ```
+  </Step>
+</Steps>
+
+## Next steps
+
+- [Configure backups](/operations/backup-recovery) for disaster recovery
+- [Set up logging](/operations/logging) to monitor database queries
+- [Deploy to production](/operations/deployment) with optimized settings

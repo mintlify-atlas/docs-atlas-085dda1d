@@ -1,0 +1,220 @@
+---
+title: Event content management
+description: Manage events using the Event Sheet Editor with dynamic columns, autosave, and undo/redo capabilities
+---
+
+The Event Sheet Editor is a spreadsheet-style interface for managing all events on OOOC Fête Finder. It supports dynamic custom columns, real-time autosave, and full undo/redo history.
+
+## Event Sheet Editor overview
+
+The Event Sheet Editor stores all event data in Postgres and provides:
+
+- Dynamic custom columns for extensibility
+- 850ms autosave to prevent data loss
+- Undo/redo with 120-step history
+- Frozen columns for easier navigation
+- Search and filter across all fields
+- Read-only system columns
+
+## Core columns
+
+These columns are required and cannot be removed:
+
+| Column | Description | Required |
+|--------|-------------|----------|
+| Event Key | System-managed stable identifier for share links | Yes (read-only) |
+| Title | Event name | Yes |
+| Date | Event date | Yes |
+| Start Time | Event start time | Yes |
+| Location | Venue or location name | Yes |
+| District/Area | Arrondissement or neighborhood | Yes |
+| Genre | Music genre category | No |
+| Price | Event pricing information | No |
+| Age | Age restrictions or recommendations | No |
+| Host Country | Hosting country (FR, UK, CA, NL) | No |
+| Audience Country | Target audience country | No |
+
+<Note>
+**Event Key** is automatically generated from canonical identity fields (Title, Date, Start Time, Location, District/Area) when missing. This ensures stable share URLs.
+</Note>
+
+## Adding and managing rows
+
+### Add a new event
+
+<Steps>
+  <Step title="Click Add row">
+    Click the **Add row** button below the search controls
+  </Step>
+  
+  <Step title="Fill required fields">
+    Enter values for Title, Date, Start Time, Location, and District/Area at minimum
+  </Step>
+  
+  <Step title="Add optional data">
+    Fill in Genre, Price, Age, and other custom columns as needed
+  </Step>
+  
+  <Step title="Save and publish">
+    Changes autosave to Postgres. Click **Save and Revalidate Homepage** to publish
+  </Step>
+</Steps>
+
+### Delete a row
+
+Click the **Delete** button in the Action column for any row. Confirm the deletion prompt. The row will be removed on next save.
+
+<Warning>
+Deleting an event removes it permanently from the event sheet and all placements. Create a backup before bulk deletions.
+</Warning>
+
+## Custom columns
+
+Add custom columns to track additional event metadata.
+
+### Create a custom column
+
+<Steps>
+  <Step title="Enter column label">
+    Type a descriptive label in the "New column label" field (e.g., "Promoter", "Capacity")
+  </Step>
+  
+  <Step title="Click Add column">
+    The column is immediately added to the sheet with a unique key
+  </Step>
+  
+  <Step title="Fill values">
+    Enter values for the new column across your event rows
+  </Step>
+</Steps>
+
+### Rename a column
+
+Click the column header input field, edit the label, and press Enter or click away to save.
+
+### Reorder columns
+
+Use the **←** and **→** buttons in column headers to move columns left or right.
+
+### Delete a custom column
+
+Click **Remove** in the column header. This removes the column and all its values permanently.
+
+<Info>
+Core columns cannot be renamed or deleted. Only custom columns support these operations.
+</Info>
+
+## Search and filtering
+
+Use the search box to filter rows by any field value:
+
+```text
+Search rows: techno
+```
+
+The search is case-insensitive and matches partial strings across all columns. The counter shows filtered vs. total rows:
+
+```text
+Showing 12 of 12 filtered rows (156 total)
+```
+
+## Frozen columns
+
+Freeze up to 4 columns to keep them visible while scrolling horizontally:
+
+<Steps>
+  <Step title="Use the + button">
+    Click **+** to increase frozen column count
+  </Step>
+  
+  <Step title="Use the - button">
+    Click **-** to decrease frozen column count
+  </Step>
+  
+  <Step title="Click Unfreeze">
+    Reset to zero frozen columns
+  </Step>
+</Steps>
+
+Frozen columns remain sticky on the left with a subtle shadow separator.
+
+## Keyboard navigation
+
+| Key | Action |
+|-----|--------|
+| Enter / Arrow Down | Move to cell below |
+| Arrow Up | Move to cell above |
+| Alt + Arrow Right | Move to cell on the right |
+| Alt + Arrow Left | Move to cell on the left |
+
+This enables fast data entry without using the mouse.
+
+## Undo and redo
+
+The editor maintains a 120-step undo/redo history:
+
+- **Undo**: Revert the last change (column add, row delete, cell edit)
+- **Redo**: Reapply an undone change
+
+History is cleared when you reload data from Postgres.
+
+<Note>
+Undo/redo works for all structural changes (add/delete rows and columns) and individual cell edits.
+</Note>
+
+## Autosave behavior
+
+Changes autosave to Postgres after 850ms of inactivity. The badge shows save status:
+
+- **All changes saved**: Everything is persisted to Postgres
+- **Unsaved changes**: Autosave timer is pending
+- **Saving...**: Write is in progress
+
+Autosave writes to Postgres **without revalidating the homepage**. To publish changes live, click **Save and Revalidate Homepage**.
+
+## System-managed columns
+
+### Event Key
+
+The Event Key is read-only and managed by the system. It's generated from:
+
+- Title
+- Date
+- Start Time
+- Location
+- District/Area
+
+This ensures stable share URLs like `/event/techno-night-2024-03-15-1830-rex-club-2nd`.
+
+<Warning>
+Manually editing Event Key is not supported. The field is locked to prevent share URL breakage.
+</Warning>
+
+### Featured column (legacy)
+
+The **Featured** column is deprecated. Use the Spotlight & Promoted Scheduler in `/admin/placements` instead.
+
+## Country codes
+
+Host Country and Audience Country support these formats:
+
+- ISO codes: `FR`, `UK`, `CA`, `NL`
+- Full names: `France`, `United Kingdom`, `Canada`, `Netherlands`
+- Common flags: 🇫🇷, 🇬🇧, 🇨🇦, 🇳🇱
+
+Unknown tokens are flagged during schema validation.
+
+## Display limits
+
+The editor displays 50 rows by default. Click **Show 50 more rows** to load additional batches.
+
+This improves performance for large event sheets while allowing full access to all data.
+
+## Best practices
+
+- **Use consistent formatting** for dates, times, and prices
+- **Keep Event Key empty** for new events (auto-generated on save)
+- **Freeze the first 2-3 columns** for easier navigation in wide sheets
+- **Search before adding** to avoid duplicate events
+- **Use custom columns sparingly** to avoid clutter
+- **Save and revalidate** after batch edits to publish atomically

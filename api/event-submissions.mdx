@@ -1,0 +1,215 @@
+---
+title: Event submission endpoint
+description: Public API for submitting event proposals to OOOC Fête Finder
+---
+
+The event submission endpoint allows hosts to propose events for inclusion in the OOOC Fête Finder calendar. All submissions are subject to review and spam detection.
+
+## POST /api/event-submissions
+
+Submits a new event proposal for review. Submissions are checked against multiple rate limits and spam signals before being accepted into the review queue.
+
+### Headers
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+### Request body
+
+<ParamField body="eventName" type="string" required>
+  Event name (2-180 characters)
+</ParamField>
+
+<ParamField body="date" type="string" required>
+  Event date (max 40 characters)
+</ParamField>
+
+<ParamField body="startTime" type="string" required>
+  Event start time (max 40 characters)
+</ParamField>
+
+<ParamField body="location" type="string" required>
+  Event location or venue (2-240 characters)
+</ParamField>
+
+<ParamField body="hostEmail" type="string" required>
+  Host contact email (valid email, max 254 characters)
+</ParamField>
+
+<ParamField body="proofLink" type="string" required>
+  HTTP(S) URL proving the event exists (max 2000 characters)
+  
+  Examples: event website, Facebook event, Eventbrite page, venue announcement
+</ParamField>
+
+<ParamField body="endTime" type="string">
+  Event end time (max 40 characters)
+</ParamField>
+
+<ParamField body="genre" type="string">
+  Event genre or category (max 120 characters)
+</ParamField>
+
+<ParamField body="price" type="string">
+  Price information (max 80 characters)
+</ParamField>
+
+<ParamField body="age" type="string">
+  Age restrictions (max 80 characters)
+</ParamField>
+
+<ParamField body="indoorOutdoor" type="string">
+  Venue setting: indoor, outdoor, or mixed (max 80 characters)
+</ParamField>
+
+<ParamField body="notes" type="string">
+  Additional notes or details (max 3000 characters)
+</ParamField>
+
+<ParamField body="arrondissement" type="string">
+  Paris arrondissement (max 32 characters)
+</ParamField>
+
+<ParamField body="formStartedAt" type="string">
+  ISO 8601 timestamp when user began filling the form (used for spam detection)
+</ParamField>
+
+<ParamField body="honeypot" type="string">
+  Honeypot field - should always be empty (used for spam detection)
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the submission was accepted
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success message: `"Thanks, your event submission has been received for review."`
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message (returned on failure)
+</ResponseField>
+
+<ResponseField name="issues" type="array">
+  Detailed validation errors (when validation fails)
+</ResponseField>
+
+### Rate limits
+
+Submissions are protected by multiple rate limits:
+
+- **IP-based**: 20 requests per 10 minutes per IP
+- **Email+IP-based**: 5 requests per hour per email/IP combination
+- **Fingerprint-based**: 1 submission per 24 hours for identical event details
+
+When rate limited, the response includes a `Retry-After` header indicating seconds to wait.
+
+### Spam detection
+
+Submissions are automatically evaluated for spam signals:
+
+- **Honeypot field filled**: If the `honeypot` field contains any value, the submission is automatically declined
+- **Completed too fast**: If `formStartedAt` indicates form completion in less than 4 seconds, the submission is flagged
+
+Submissions with spam signals are automatically declined but still return a success response to avoid revealing detection methods.
+
+### Service availability
+
+The endpoint checks if event submissions are enabled in the system settings. When disabled, it returns:
+
+```json
+{
+  "success": false,
+  "error": "Event submissions are temporarily closed."
+}
+```
+
+Status code: `503 Service Unavailable`
+
+### Examples
+
+<CodeGroup>
+
+```javascript Success
+const response = await fetch('/api/event-submissions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    eventName: 'Jazz Night at Le Sunset',
+    date: '2026-03-15',
+    startTime: '20:00',
+    endTime: '23:30',
+    location: 'Le Sunset, 60 Rue des Lombards, 75001 Paris',
+    hostEmail: 'contact@lesunset.com',
+    proofLink: 'https://www.lesunset.com/events/jazz-night-march',
+    genre: 'Jazz',
+    price: '15€',
+    age: '18+',
+    indoorOutdoor: 'indoor',
+    arrondissement: '1st',
+    notes: 'Featuring local and international artists',
+    formStartedAt: new Date(Date.now() - 30000).toISOString(),
+    honeypot: ''
+  })
+});
+
+const data = await response.json();
+// {
+//   "success": true,
+//   "message": "Thanks, your event submission has been received for review."
+// }
+```
+
+```javascript Validation error
+const response = await fetch('/api/event-submissions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    eventName: 'J',
+    date: '2026-03-15',
+    startTime: '20:00',
+    location: 'Paris',
+    hostEmail: 'invalid-email',
+    proofLink: 'not-a-url'
+  })
+});
+
+const data = await response.json();
+// {
+//   "success": false,
+//   "error": "Invalid submission details",
+//   "issues": [
+//     "Event name must be at least 2 characters",
+//     "Valid email address required",
+//     "Proof link must be an HTTP(S) URL"
+//   ]
+// }
+```
+
+```javascript Rate limited
+// Response status: 429
+// Headers: { "Retry-After": "120" }
+// {
+//   "success": false,
+//   "error": "Too many submissions. Please try again shortly."
+// }
+```
+
+```javascript Unsupported media type
+const response = await fetch('/api/event-submissions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'text/plain' },
+  body: 'some text'
+});
+
+// Response status: 415
+// {
+//   "success": false,
+//   "error": "Unsupported media type"
+// }
+```
+
+</CodeGroup>

@@ -1,0 +1,168 @@
+---
+title: Rate limiting
+description: Rate limiting implementation and protection policies for OOOC Fête Finder
+---
+
+Public write and tracking endpoints are protected with in-app Postgres-backed atomic counters. Edge WAF can still be layered for additional protection.
+
+## Protected endpoints
+
+The following API endpoints have rate limiting enabled:
+
+- `POST /api/auth/verify` - User authentication
+- `POST /api/event-submissions` - Event submission
+- `POST /api/track` - Analytics tracking
+- `POST /api/track/discovery` - Discovery event tracking
+- `POST /api/user/preference` - User preference updates
+
+## Rate limit policies
+
+### Authentication endpoint
+
+`POST /api/auth/verify`
+
+<ParamField path="IP limit" type="60 requests / 60 seconds">
+  Per-IP address rate limit for authentication attempts
+</ParamField>
+
+<ParamField path="Email + IP limit" type="6 requests / 15 minutes">
+  Combined email and IP address limit to prevent targeted attacks
+</ParamField>
+
+<ParamField path="Block response" type="429">
+  Returns HTTP 429 with `Retry-After` header
+</ParamField>
+
+<Note>
+  When the rate limiter is unavailable, authentication requests fail-open (allowed) to maintain service availability.
+</Note>
+
+### Event submission endpoint
+
+`POST /api/event-submissions`
+
+<ParamField path="IP limit" type="20 requests / 10 minutes">
+  Per-IP address limit for event submissions
+</ParamField>
+
+<ParamField path="Email + IP limit" type="5 requests / 60 minutes">
+  Combined email and IP address limit
+</ParamField>
+
+<ParamField path="Fingerprint limit" type="1 request / 24 hours">
+  Content-based fingerprint limit to prevent duplicate submissions
+</ParamField>
+
+<ParamField path="Block response" type="429">
+  Returns HTTP 429 with `Retry-After` header
+</ParamField>
+
+<Warning>
+  When the rate limiter is unavailable, event submissions fail-closed (503 Service Unavailable) to prevent abuse.
+</Warning>
+
+### Tracking endpoints
+
+`POST /api/track`
+
+<ParamField path="IP limit" type="240 requests / 60 seconds">
+  Per-IP address limit for general tracking events
+</ParamField>
+
+<ParamField path="Session limit" type="200 requests / 60 seconds">
+  Per-session limit for tracking events
+</ParamField>
+
+<Info>
+  On limiter failure or block, the endpoint returns 202 Accepted without recording the event.
+</Info>
+
+`POST /api/track/discovery`
+
+<ParamField path="IP limit" type="180 requests / 60 seconds">
+  Per-IP address limit for discovery tracking
+</ParamField>
+
+<ParamField path="Session limit" type="150 requests / 60 seconds">
+  Per-session limit for discovery tracking
+</ParamField>
+
+<Info>
+  On limiter failure or block, the endpoint returns 202 Accepted without recording the event.
+</Info>
+
+### User preference endpoint
+
+`POST /api/user/preference`
+
+<ParamField path="IP limit" type="120 requests / 60 seconds">
+  Per-IP address limit for preference updates
+</ParamField>
+
+<Info>
+  Invalid or unauthenticated requests are accepted as no-ops with 202 status.
+</Info>
+
+## Implementation details
+
+### Counter storage
+
+Rate limit counters are stored in the `app_rate_limit_counters` table with atomic increment operations to ensure accuracy under concurrent load.
+
+### IP extraction
+
+Client IP addresses are extracted from request headers in the following order:
+
+1. `x-forwarded-for` (first IP in the list)
+2. `x-real-ip`
+3. Falls back to "unknown" if neither header is present
+
+See `extractClientIpFromHeaders` in `features/security/rate-limiter.ts:56`.
+
+### Privacy protection
+
+<Note>
+  Limiter keys are HMAC-hashed using `AUTH_SECRET` before storage. Raw IP addresses and email addresses are never persisted in the rate limit counter table.
+</Note>
+
+The key hash is generated using:
+
+```typescript
+createHmac('sha256', env.AUTH_SECRET)
+  .update(parts.join('|'))
+  .digest('hex')
+```
+
+See `buildRateLimitKeyHash` in `features/security/rate-limiter.ts:75`.
+
+## Cleanup
+
+Expired rate limit counters are automatically cleaned up via a scheduled cron job:
+
+<ParamField path="Endpoint" type="GET /api/cron/cleanup-rate-limits">
+  Cron endpoint for cleaning up expired counters
+</ParamField>
+
+<ParamField path="Authentication" type="Authorization: Bearer <CRON_SECRET>">
+  Requires CRON_SECRET environment variable for authentication
+</ParamField>
+
+<ParamField path="Behavior" type="Deletes expired counters with grace window">
+  Removes counters that have expired beyond a 24-hour grace period
+</ParamField>
+
+## Failover behavior
+
+Different endpoints have different failover strategies when the rate limiter is unavailable:
+
+| Endpoint | Behavior |
+|----------|----------|
+| `/api/auth/verify` | Fail-open (allow request) |
+| `/api/event-submissions` | Fail-closed (return 503) |
+| `/api/track` | Accept with 202 (don't record) |
+| `/api/track/discovery` | Accept with 202 (don't record) |
+| `/api/user/preference` | Allow request |
+
+<Warning>
+  Event submissions use fail-closed behavior to prevent spam when the rate limiter is down. All other endpoints prioritize availability.
+</Warning>

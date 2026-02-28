@@ -1,0 +1,265 @@
+---
+title: Data modes
+description: Runtime data source configuration and behavior for OOOC Fête Finder
+---
+
+OOOC Fête Finder supports three data modes controlled by the `DATA_MODE` environment variable. Each mode determines the primary source and fallback chain for live event reads.
+
+## Available modes
+
+### Remote mode
+
+**Value:** `DATA_MODE=remote`
+
+**Default:** Yes (when `DATA_MODE` is unset in development)
+
+**Recommended for:** Production and preview deployments
+
+Remote mode uses a two-tier source chain with automatic fallback:
+
+1. **Primary:** Postgres event store (managed via admin)
+2. **Fallback:** Local CSV file (`data/events.csv`) if Postgres is unavailable
+
+<Info>
+  Remote mode is the **required** mode for Vercel preview and production deployments. Missing or invalid `DATA_MODE` in these environments triggers a startup failure.
+</Info>
+
+**Source priority:**
+
+```mermaid
+graph LR
+    A[Request] --> B{Postgres store available?}
+    B -->|Yes| C[Serve from Postgres]
+    B -->|No| D[Fallback to local CSV]
+    D --> E[Serve stale-safe data]
+```
+
+**When to use:**
+- Production deployments with Postgres configured
+- Environments where admin-managed content is the source of truth
+- Applications requiring real-time event updates via admin panel
+
+**Requirements:**
+- `DATABASE_URL` must be configured for Postgres reads
+- Local CSV file (`data/events.csv`) should exist as a fallback safety net
+
+**Fallback behavior:**
+
+If the Postgres store is unavailable or returns no data, the application automatically falls back to the local CSV and adds a warning:
+
+> "Managed store unavailable; serving local CSV fallback (stale-safe mode)."
+
+This ensures the site remains functional even during database outages, though the data may be stale.
+
+### Local mode
+
+**Value:** `DATA_MODE=local`
+
+**Recommended for:** Local development without Postgres
+
+Local mode reads events exclusively from the local CSV file at `data/events.csv`.
+
+**Source priority:**
+
+```mermaid
+graph LR
+    A[Request] --> B[Read data/events.csv]
+    B --> C[Serve events]
+```
+
+**When to use:**
+- Local development without a Postgres connection
+- Testing with a static dataset
+- Environments where admin-managed content is not needed
+
+**Requirements:**
+- `data/events.csv` must exist and contain valid event data
+
+**Behavior:**
+- No Postgres connection required
+- No fallback chain (local CSV is the only source)
+- Coordinate population is **disabled** by default in local mode
+
+<Warning>
+  Local mode should **not** be used in production. It does not support admin content management or real-time updates.
+</Warning>
+
+### Test mode
+
+**Value:** `DATA_MODE=test`
+
+**Recommended for:** Automated testing and CI/CD pipelines
+
+Test mode uses in-memory static data from `data/events.ts` without reading files or databases.
+
+**Source priority:**
+
+```mermaid
+graph LR
+    A[Request] --> B[Load EVENTS_DATA from memory]
+    B --> C[Serve test events]
+```
+
+**When to use:**
+- Automated tests (Jest, Playwright, etc.)
+- CI/CD environments without database access
+- Development scenarios requiring deterministic test data
+
+**Behavior:**
+- No file reads
+- No database connections
+- Instant data availability (no I/O)
+- Deterministic and reproducible results
+
+<Info>
+  Test mode is ideal for integration and E2E tests where you need predictable event data without external dependencies.
+</Info>
+
+## Mode comparison
+
+| Feature | Remote | Local | Test |
+|---------|--------|-------|------|
+| **Primary source** | Postgres store | Local CSV | In-memory data |
+| **Fallback source** | Local CSV | None | None |
+| **Admin management** | ✅ Yes | ❌ No | ❌ No |
+| **Requires DATABASE_URL** | ✅ Yes | ❌ No | ❌ No |
+| **Coordinate population** | ✅ Enabled | ❌ Disabled | N/A |
+| **Real-time updates** | ✅ Yes | ❌ No | ❌ No |
+| **Stale-safe fallback** | ✅ Yes | ❌ No | ❌ No |
+| **Production use** | ✅ Required | ❌ Not recommended | ❌ Not recommended |
+
+## Data flow in remote mode
+
+Remote mode follows this detailed flow:
+
+1. **Request initiated:** Server component or API route calls `DataManager.getEventsData()`
+2. **Try Postgres store:**
+   - Query `LocalEventStore.getCsv()` for event sheet data
+   - Process CSV data with `processCSVData()`
+   - Hydrate event keys and validate data
+   - Populate coordinates from KV cache (if geocoding enabled)
+3. **On Postgres success:** Return events with source `"store"`
+4. **On Postgres failure:**
+   - Log failure reason
+   - Attempt local CSV fallback at `data/events.csv`
+5. **On local CSV success:** Return events with source `"local"` and stale-safe warning
+6. **On both failures:** Return empty data with error messages
+
+<Note>
+  Coordinate population in remote mode is durable and KV-backed (`maps:locations:v1`). Coordinates are prewarmed on admin writes to reduce live geocoding churn.
+</Note>
+
+## Runtime validation
+
+All modes validate event data after loading:
+
+- **Row count check:** Must return at least 1 event
+- **Schema validation:** Events must match the `Event` type
+- **Required fields:** Each event must have `Event Key`, `Venue`, etc.
+
+<Warning>
+  If validation fails, the source is skipped and the next fallback is attempted (in remote mode) or an error is returned (in local/test modes).
+</Warning>
+
+## Configuration examples
+
+<Accordion title="Production setup (remote mode)">
+  ```bash
+  # .env.production
+  DATA_MODE=remote
+  DATABASE_URL=postgresql://user:pass@host:5432/dbname?sslmode=require
+  AUTH_SECRET=<generate-secret>
+  ADMIN_KEY=<generate-key>
+  ```
+  
+  This configuration uses Postgres as the primary source with local CSV as a stale-safe fallback.
+</Accordion>
+
+<Accordion title="Local development (local mode)">
+  ```bash
+  # .env.local
+  DATA_MODE=local
+  AUTH_SECRET=<generate-secret>
+  ```
+  
+  This configuration reads events from `data/events.csv` without requiring Postgres.
+</Accordion>
+
+<Accordion title="Testing (test mode)">
+  ```bash
+  # .env.test
+  DATA_MODE=test
+  AUTH_SECRET=test-secret-minimum-32-characters-long
+  ```
+  
+  This configuration uses in-memory test data for fast, deterministic tests.
+</Accordion>
+
+## Switching modes
+
+To switch data modes:
+
+1. Update `DATA_MODE` in your `.env` file or deployment platform
+2. Restart the development server or redeploy
+3. Verify the mode in admin at `/admin/operations` → Data Store Status
+
+<Info>
+  The active data mode and current source are displayed in the startup banner and in the admin Operations panel.
+</Info>
+
+## Production requirements
+
+<Warning>
+  In Vercel `preview` or `production` environments:
+  
+  - `DATA_MODE` **must** be explicitly set
+  - `DATA_MODE` must be one of: `remote`, `local`, or `test`
+  - Missing or invalid `DATA_MODE` causes immediate startup failure
+  
+  **Recommended production value:** `DATA_MODE=remote`
+</Warning>
+
+## Troubleshooting
+
+<Accordion title="Startup failure: Missing DATA_MODE">
+  **Error message:**
+  > Missing required DATA_MODE in production. Set DATA_MODE to remote, local, or test.
+  
+  **Solution:**
+  Add `DATA_MODE=remote` to your production environment variables and redeploy.
+</Accordion>
+
+<Accordion title="Remote mode falls back to local CSV">
+  **Warning message:**
+  > Managed store unavailable; serving local CSV fallback (stale-safe mode).
+  
+  **Possible causes:**
+  - `DATABASE_URL` not configured
+  - Postgres connection failure
+  - Event store tables not initialized
+  
+  **Solution:**
+  1. Verify `DATABASE_URL` is set correctly
+  2. Run `pnpm bootstrap:postgres-store` to seed the event store
+  3. Check database connectivity with `pnpm health:check`
+</Accordion>
+
+<Accordion title="Local mode returns no events">
+  **Error message:**
+  > Local CSV fallback failed: [specific error]
+  
+  **Possible causes:**
+  - `data/events.csv` does not exist
+  - CSV file is empty or malformed
+  - CSV headers do not match expected schema
+  
+  **Solution:**
+  1. Verify `data/events.csv` exists in the project root
+  2. Check CSV headers match the expected schema
+  3. Ensure at least one valid event row exists
+</Accordion>
+
+## Related configuration
+
+- [Environment variables](/reference/environment-variables) - Complete environment variable reference
+- [Caching policy](/reference/caching-policy) - ISR and revalidation behavior

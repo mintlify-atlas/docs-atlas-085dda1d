@@ -1,0 +1,217 @@
+---
+title: Architecture overview
+description: System architecture, rendering contracts, and code organization for OOOC Fête Finder
+---
+
+OOOC Fête Finder is a Next.js App Router application for discovering Fête de la Musique events in Paris. The system combines static-first rendering for fast public delivery with server-authenticated admin workflows, Postgres-backed runtime data, and first-party engagement tracking.
+
+## System at a glance
+
+- Public pages are static-first and optimized for fast ISR delivery
+- Admin pages and APIs are server-authenticated and module-based
+- Runtime event reads use a source chain controlled by `DATA_MODE`
+- Spotlight/promoted scheduling is Postgres-backed
+- Engagement tracking powers social proof, insights, and partner reporting
+
+## Rendering contract
+
+### Route cache rules
+
+The application uses a mix of static-first and dynamic rendering strategies:
+
+- `/`: ISR with `revalidate = 300` (5 minutes)
+- `/feature-event`: Static-first with short cached featured reads (`revalidate = 60`)
+- `/submit-event`: Static-first (`revalidate = 300`)
+- `/partner-success`: Static-first (`revalidate = 300`)
+- `/privacy`: `force-static` (build-time only)
+- `/event/[eventKey]/[[...slug]]`: Dynamic route render
+- `/partner-stats/[activationId]`: `force-dynamic` (always request-time)
+- `/admin/*`: `force-dynamic` + `noStore()` (always request-time)
+
+<Note>
+The root layout (`app/layout.tsx`) stays cache-friendly and should not depend on request cookies to maintain static generation compatibility.
+</Note>
+
+### Staleness semantics
+
+For ISR routes, "stale" means users may receive the last cached render until background regeneration completes successfully. If regeneration produces identical output, users effectively continue receiving the same payload.
+
+<Info>
+Revalidation performs server work but doesn't imply a full "new site download" for users when content is unchanged.
+</Info>
+
+## Admin console contract
+
+Admin is split into focused surfaces:
+
+- `/admin` - Overview hub and launchpad
+- `/admin/operations` - Runtime health, store controls, sessions, recovery
+- `/admin/content` - Event sheet editor, submissions moderation, sliding banner
+- `/admin/placements` - Paid orders queue + spotlight/promoted schedulers
+- `/admin/insights` - Engagement analytics and audience tools
+
+All admin routes require server-validated admin session authentication.
+
+## Auth contract
+
+The application uses two separate authentication contexts:
+
+- **Public user session**: `oooc_user_session` cookie, managed through auth context for user-facing features
+- **Admin session**: Server-validated session required for all admin routes, actions, and APIs
+
+<Warning>
+Header and UI auth hints should always derive from centralized session state, not request cookies directly.
+</Warning>
+
+## Data contract
+
+### Runtime event reads flow
+
+Event data flows through a well-defined service layer:
+
+```typescript
+// Entry point: features/data-management/runtime-service.ts
+await getLiveEvents({
+  includeFeaturedProjection: true,
+  includeEngagementProjection: true
+})
+```
+
+The data pipeline:
+
+1. `features/data-management/runtime-service.ts#getLiveEvents()`
+2. `features/data-management/data-manager.ts#getEventsData()`
+3. Source order based on `DATA_MODE`:
+   - `DATA_MODE=remote`: Managed Postgres store → local CSV fallback
+   - `DATA_MODE=local`: Local CSV only
+   - `DATA_MODE=test`: Test fixture data
+
+### Data processing pipeline
+
+After source read, events go through processing:
+
+1. **Event key hydration**: Generate or validate `eventKey` for stable identity
+2. **Quality checks**: Validate required fields and data integrity
+3. **Coordinate population**: KV-backed geocoding with warm-up and cache
+4. **Projection layers**: Apply featured/promoted status and engagement counts
+
+<Accordion title="View coordinate storage details">
+Coordinate storage is durable KV-backed (`maps:locations:v1`) and prewarmed on admin writes (save/import/sheet save + revalidate) to reduce live geocoding churn. Warm-up also prunes stale keys and auto-upgrades `estimated` entries when geocoding is available.
+</Accordion>
+
+### Projection behavior
+
+By default, runtime service enables:
+
+- **Featured projection**: Active spotlight schedule status
+- **Promoted projection**: Active promoted placement status  
+- **Engagement projection**: `calendarSyncCount` hydration for social proof
+
+Disable projections when you need raw event data for analytics or admin workflows.
+
+## Engagement tracking contract
+
+First-party tracking endpoints:
+
+- `POST /api/track` - Records event actions (`click`, `outbound_click`, `calendar_sync`)
+- `POST /api/track/discovery` - Records search/filter behavior
+- `POST /api/user/preference` - Records authenticated genre preferences
+
+The "saved this" UX maps to aggregate `calendar_sync` interaction counts.
+
+## Canonical stores
+
+### Event store
+
+- `app_event_store_columns` - Column definitions
+- `app_event_store_rows` - Event data rows
+- `app_event_store_meta` - Metadata and timestamps
+- `app_event_store_settings` - Store configuration
+
+### Scheduling
+
+- `app_featured_event_schedule` - Spotlight scheduling
+- `app_promoted_event_schedule` - Promoted placement scheduling
+
+### Engagement
+
+- `app_event_engagement_stats` - Event interaction tracking
+- `app_discovery_analytics_stats` - Search and filter analytics
+- `app_user_genre_preferences` - User preference signals
+
+### Other app state
+
+- `app_kv_store` - Generic key-value storage
+- `app_event_submissions` - Host event submissions queue
+- `app_rate_limit_counters` - Abuse protection counters
+- `app_partner_activation_queue` - Partner campaign queue
+
+## Code map
+
+Key directories and their responsibilities:
+
+```
+app/                          Routes and API handlers
+features/
+  data-management/            Runtime orchestration + admin write actions
+    runtime-service.ts        Public entry point for event reads
+    data-manager.ts           Source chain and fallback logic
+    data-processor.ts         CSV parsing and event assembly
+    assembly/                 Event key generation, date normalization
+  events/                     Event domain logic, UI, tracking
+    featured/                 Spotlight scheduling service
+    promoted/                 Promoted placement service
+    engagement/               Tracking actions and analytics
+  partners/                   Activation queue + partner stats
+  security/                   Rate limiting and anti-abuse
+lib/platform/                 Logging, KV adapters, Postgres repositories
+```
+
+<Info>
+The `features/` directory uses domain-driven organization. Each feature is self-contained with its own types, services, and UI components.
+</Info>
+
+## Cache and revalidation policy
+
+### What "stale" means
+
+In this app, "stale" means users see the last cached HTML/RSC payload for a route, not the newest backend state.
+
+For routes with `revalidate: N`:
+
+1. Cached output can be reused for up to `N` seconds
+2. After that window, the next request may still receive cached payload while Next.js regenerates in the background
+3. Once regeneration succeeds, later requests receive the new payload
+4. If regeneration fails, the cached payload continues serving until successful regeneration
+
+### Shared cached data
+
+Sliding banner settings use `unstable_cache` with:
+- `revalidate = 300` (5 minutes)
+- Tag/path invalidation helpers in `features/site-settings/cache.ts`
+
+## No custom app cache layer
+
+There is no custom in-memory events cache. What might look like caching:
+
+- **Logger dedupe map** (`logger.ts:20`) - Only log suppression, not data caching
+- **Runtime metrics** (`runtime-service.ts:74`) - Telemetry counters only
+
+Public delivery relies entirely on Next.js built-ins (ISR/revalidate APIs).
+
+## Related documentation
+
+<CardGroup cols={2}>
+  <Card title="Data flow" href="/architecture/data-flow" icon="arrow-right-arrow-left">
+    Understand runtime data flow and processing pipeline
+  </Card>
+  <Card title="Event identity" href="/architecture/event-identity" icon="fingerprint">
+    Stable event keys and share link model
+  </Card>
+  <Card title="Engagement tracking" href="/architecture/engagement-tracking" icon="chart-line">
+    Tracking system and social proof semantics
+  </Card>
+  <Card title="Admin workflow" href="/admin/workflow" icon="user-gear">
+    Day-to-day admin publish flow
+  </Card>
+</CardGroup>

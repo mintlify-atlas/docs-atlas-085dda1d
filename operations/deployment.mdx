@@ -1,0 +1,304 @@
+---
+title: Deployment
+description: Deploy OOOC Fête Finder to Vercel with proper configuration
+---
+
+## Overview
+
+OOOC Fête Finder is designed for deployment on Vercel with PostgreSQL as the primary data store. This guide covers environment setup, deployment configuration, and post-deploy verification.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Create a Vercel project">
+    Connect your repository to Vercel and configure the project settings.
+  </Step>
+  
+  <Step title="Provision PostgreSQL database">
+    Use Vercel Postgres or any compatible PostgreSQL provider (Neon, Supabase, etc.).
+  </Step>
+  
+  <Step title="Generate secrets">
+    Generate required secrets before configuring environment variables.
+    
+    ```bash
+    # Generate AUTH_SECRET (required)
+    openssl rand -base64 48
+    
+    # Generate ADMIN_KEY (recommended)
+    openssl rand -hex 24
+    
+    # Generate CRON_SECRET (optional)
+    openssl rand -base64 48
+    
+    # Generate DEPLOY_REVALIDATE_SECRET (optional)
+    openssl rand -base64 48
+    ```
+  </Step>
+</Steps>
+
+## Required environment variables
+
+Configure these in both **Preview** and **Production** environments:
+
+<CodeGroup>
+```bash Production
+# Core configuration
+NODE_ENV=production
+DATA_MODE=remote
+AUTH_SECRET=your-generated-auth-secret-here
+ADMIN_KEY=your-generated-admin-key-here
+
+# Database
+DATABASE_URL=postgresql://user:pass@host:5432/dbname?sslmode=require
+
+# Public URLs
+NEXT_PUBLIC_SITE_URL=https://your-domain.com
+NEXT_PUBLIC_BASE_PATH=
+
+# Cron protection (recommended)
+CRON_SECRET=your-generated-cron-secret-here
+DEPLOY_REVALIDATE_SECRET=your-generated-deploy-secret-here
+```
+
+```bash Preview
+# Core configuration
+NODE_ENV=production
+DATA_MODE=remote
+AUTH_SECRET=your-generated-auth-secret-here
+ADMIN_KEY=your-generated-admin-key-here
+
+# Database (preview branch)
+DATABASE_URL=postgresql://user:pass@preview-host:5432/dbname?sslmode=require
+
+# Public URLs
+NEXT_PUBLIC_SITE_URL=https://your-preview.vercel.app
+NEXT_PUBLIC_BASE_PATH=
+```
+</CodeGroup>
+
+<Note>
+  See the [Environment Variables](/reference/environment-variables) reference for a complete list of optional configuration.
+</Note>
+
+## Deployment configuration
+
+The application includes a `vercel.json` configuration file that defines:
+
+### Cron jobs
+
+```json vercel.json
+{
+  "crons": [
+    { "path": "/api/cron/cleanup-admin-sessions", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/cleanup-rate-limits", "schedule": "10 4 * * *" },
+    { "path": "/api/cron/backup-event-store", "schedule": "20 4 * * *" }
+  ]
+}
+```
+
+<Info>
+  All cron endpoints require `Authorization: Bearer <CRON_SECRET>` header. Set `CRON_SECRET` in your environment variables.
+</Info>
+
+### Function timeouts
+
+```json vercel.json
+{
+  "functions": {
+    "app/api/og/route.tsx": { "maxDuration": 10 }
+  }
+}
+```
+
+### Cache headers
+
+```json vercel.json
+{
+  "headers": [
+    {
+      "source": "/api/og",
+      "headers": [
+        { "key": "Cache-Control", "value": "s-maxage=86400, stale-while-revalidate=604800" },
+        { "key": "Content-Type", "value": "image/png" }
+      ]
+    }
+  ]
+}
+```
+
+## Deploy steps
+
+<Steps>
+  <Step title="Bootstrap the database">
+    After first deployment, initialize the database schema and seed data:
+    
+    ```bash
+    # Local bootstrap (requires DATABASE_URL)
+    DATABASE_URL="your-database-url" pnpm bootstrap:postgres-store
+    ```
+    
+    This script:
+    - Creates required tables (`app_kv_store`, `app_event_store_*`)
+    - Migrates legacy KV data if present
+    - Seeds from `data/events.csv` if tables are empty
+    - Initializes user collection
+  </Step>
+  
+  <Step title="Verify database connection">
+    Check database health via the admin panel or CLI:
+    
+    ```bash
+    # Via CLI
+    DATABASE_URL="your-database-url" pnpm db:cli status
+    
+    # Via admin panel
+    # Navigate to /admin/operations
+    ```
+  </Step>
+  
+  <Step title="Access admin panel">
+    Navigate to `/admin` and authenticate with your `ADMIN_KEY`.
+    
+    The admin dashboard shows:
+    - Runtime status and data source
+    - Database connectivity
+    - Current event count
+    - Backup status
+  </Step>
+  
+  <Step title="Load initial data">
+    From `/admin/operations`, you can:
+    - Upload CSV to PostgreSQL
+    - Import from Google Sheets backup
+    - Review event data in sheet editor
+  </Step>
+  
+  <Step title="Configure deploy hook (optional)">
+    Set up automatic cache invalidation after deploys:
+    
+    1. Add `DEPLOY_REVALIDATE_SECRET` to environment variables
+    2. Configure Vercel Deploy Hook to call:
+       ```
+       POST https://your-domain.com/api/revalidate/deploy
+       Authorization: Bearer <DEPLOY_REVALIDATE_SECRET>
+       ```
+  </Step>
+</Steps>
+
+## Post-deploy verification
+
+<Steps>
+  <Step title="Check application health">
+    ```bash
+    curl https://your-domain.com/api/admin/health \
+      -H "x-admin-key: your-admin-key"
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "status": "healthy",
+      "database": "connected",
+      "dataMode": "remote",
+      "eventCount": 123
+    }
+    ```
+  </Step>
+  
+  <Step title="Verify cron jobs">
+    Check Vercel dashboard > Cron Jobs to confirm:
+    - All three cron jobs are registered
+    - Schedules match `vercel.json`
+    - First runs are scheduled
+  </Step>
+  
+  <Step title="Test event data">
+    Visit the homepage and verify:
+    - Events load correctly
+    - Map coordinates display
+    - Filters function properly
+  </Step>
+  
+  <Step title="Test admin operations">
+    From `/admin/operations`:
+    - Create a backup ("Backup Now")
+    - Verify backup appears in recent snapshots
+    - Check runtime status cards show correct source
+  </Step>
+</Steps>
+
+## Common deployment issues
+
+### Runtime errors in preview/production
+
+<Warning>
+  If you see runtime errors, verify these in order:
+</Warning>
+
+1. **Database connection**: Confirm `DATABASE_URL` is set in both Preview and Production
+2. **Data mode**: Verify `DATA_MODE=remote` is explicitly set
+3. **Secrets**: Confirm `AUTH_SECRET` is at least 32 characters
+4. **Cron secrets**: If using cron jobs, verify `CRON_SECRET` is set
+5. **Node runtime**: Verify route handlers use Node runtime where needed
+
+### Database not initialized
+
+If the database is empty after deployment:
+
+```bash
+# Re-run bootstrap script
+DATABASE_URL="your-production-url" pnpm bootstrap:postgres-store
+```
+
+### Stale cache after publish
+
+If homepage doesn't reflect saved changes:
+
+1. From `/admin/operations`, click "Save and Revalidate Homepage"
+2. Verify runtime source in "Live Runtime Snapshot"
+3. If needed, call the deploy revalidation endpoint manually
+
+## Deploy hook integration
+
+Automate cache invalidation on every deploy:
+
+<Steps>
+  <Step title="Create deploy hook in Vercel">
+    Project Settings > Git > Deploy Hooks > Create Hook
+    - Name: "Post-Deploy Revalidate"
+    - Branch: "main" (or your production branch)
+  </Step>
+  
+  <Step title="Configure webhook target">
+    Use your application's revalidation endpoint:
+    
+    ```
+    POST https://your-domain.com/api/revalidate/deploy
+    Authorization: Bearer <DEPLOY_REVALIDATE_SECRET>
+    ```
+  </Step>
+  
+  <Step title="Test the webhook">
+    Trigger a test deploy and verify:
+    - Webhook receives 200 response
+    - Cache is invalidated
+    - New data appears on homepage
+  </Step>
+</Steps>
+
+## Monitoring
+
+Monitor your deployment using:
+
+- **Vercel Logs**: Real-time function logs and errors
+- **Admin health endpoint**: `/api/admin/health` for application status
+- **Database CLI**: `pnpm db:cli status` for database diagnostics
+- **Health check script**: `pnpm health:check` for comprehensive diagnostics
+
+## Next steps
+
+- [Configure PostgreSQL](/operations/postgres-setup) for optimal performance
+- [Set up logging](/operations/logging) for observability
+- [Configure backups](/operations/backup-recovery) for disaster recovery
+- [Harden serverless runtime](/operations/serverless-hardening) for production

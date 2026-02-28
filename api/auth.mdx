@@ -1,0 +1,196 @@
+---
+title: Authentication endpoints
+description: Public authentication API for user verification and session management
+---
+
+The authentication API allows users to verify their identity and manage their session state. Authentication is optional but enables features like event submissions and personalized content.
+
+## POST /api/auth/verify
+
+Validates user details and creates an authenticated session by setting the `oooc_user_session` cookie.
+
+### Request
+
+<ParamField body="firstName" type="string" required>
+  User's first name (minimum 2 characters)
+</ParamField>
+
+<ParamField body="lastName" type="string" required>
+  User's last name (minimum 2 characters)
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Valid email address (max 254 characters)
+</ParamField>
+
+<ParamField body="consent" type="boolean" required>
+  User consent acknowledgment (must be `true`)
+</ParamField>
+
+<ParamField body="source" type="string">
+  Optional source identifier (defaults to `"fete-finder-auth"`)
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the verification was successful
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Verified email address (returned on success)
+</ResponseField>
+
+<ResponseField name="storedIn" type="string">
+  Storage provider used (e.g., `"postgres"`, `"memory"`)
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Status message: `"User verified"` for new users or `"Existing user verified"` for returning users
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message (returned on failure)
+</ResponseField>
+
+<ResponseField name="issues" type="array">
+  Detailed validation errors (when applicable)
+</ResponseField>
+
+### Rate limits
+
+- **IP-based**: 60 requests per minute per IP
+- **Email+IP-based**: 6 requests per 15 minutes per email/IP combination
+
+When rate limited, the response includes a `Retry-After` header indicating seconds to wait.
+
+### Examples
+
+<CodeGroup>
+
+```javascript Success
+const response = await fetch('/api/auth/verify', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    firstName: 'Marie',
+    lastName: 'Dupont',
+    email: 'marie@example.com',
+    consent: true,
+    source: 'newsletter-signup'
+  })
+});
+
+const data = await response.json();
+// {
+//   "success": true,
+//   "email": "marie@example.com",
+//   "storedIn": "postgres",
+//   "message": "User verified"
+// }
+```
+
+```javascript Validation error
+const response = await fetch('/api/auth/verify', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    firstName: 'M',
+    lastName: 'Dupont',
+    email: 'marie@example.com',
+    consent: true
+  })
+});
+
+const data = await response.json();
+// {
+//   "success": false,
+//   "error": "First name must be at least 2 characters"
+// }
+```
+
+```javascript Rate limited
+// Response status: 429
+// Headers: { "Retry-After": "42" }
+// {
+//   "success": false,
+//   "error": "Too many attempts. Please try again shortly."
+// }
+```
+
+</CodeGroup>
+
+---
+
+## GET /api/auth/session
+
+Returns the current authentication session state for both public users and admin users.
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Always `true`
+</ResponseField>
+
+<ResponseField name="isAuthenticated" type="boolean" required>
+  Whether the user has a valid public session
+</ResponseField>
+
+<ResponseField name="isAdminAuthenticated" type="boolean" required>
+  Whether the user has admin privileges
+</ResponseField>
+
+<ResponseField name="email" type="string | null" required>
+  Email address from the session cookie, or `null` if not authenticated
+</ResponseField>
+
+### Examples
+
+<CodeGroup>
+
+```javascript Authenticated
+const response = await fetch('/api/auth/session');
+const data = await response.json();
+// {
+//   "success": true,
+//   "isAuthenticated": true,
+//   "isAdminAuthenticated": false,
+//   "email": "marie@example.com"
+// }
+```
+
+```javascript Not authenticated
+const response = await fetch('/api/auth/session');
+const data = await response.json();
+// {
+//   "success": true,
+//   "isAuthenticated": false,
+//   "isAdminAuthenticated": false,
+//   "email": null
+// }
+```
+
+</CodeGroup>
+
+---
+
+## DELETE /api/auth/session
+
+Clears the current user session by removing the `oooc_user_session` cookie.
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Always `true`
+</ResponseField>
+
+### Example
+
+```javascript
+const response = await fetch('/api/auth/session', {
+  method: 'DELETE'
+});
+
+const data = await response.json();
+// { "success": true }
+```

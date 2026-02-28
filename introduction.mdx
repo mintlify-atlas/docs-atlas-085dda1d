@@ -1,0 +1,181 @@
+---
+title: Introduction
+description: Welcome to OOOC Fête Finder — a Next.js app for discovering Fête de la Musique events with a powerful admin workflow built around a Postgres source of truth.
+---
+
+# Welcome to OOOC Fête Finder
+
+OOOC Fête Finder is a modern Next.js application designed to help people discover Fête de la Musique events across Paris. Built with performance and reliability in mind, it features a comprehensive admin workflow, robust data management, and seamless integrations.
+
+## What is OOOC Fête Finder?
+
+OOOC Fête Finder provides a curated, searchable directory of live music and cultural events for Fête de la Musique in Paris. The app combines:
+
+- **Interactive event discovery** with map-based browsing by arrondissement
+- **Flexible filtering** by categories, tags, date, time, and location
+- **User engagement tracking** with calendar sync and social proof
+- **Host event submissions** for community-contributed events
+- **Admin workflow** for content management, scheduling, and analytics
+- **Postgres-backed data store** for reliability and scalability
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Event discovery" icon="calendar">
+    Browse events by arrondissement with interactive maps, filters, and search. Features include featured event spotlights, promoted placements, and saved event tracking.
+  </Card>
+  
+  <Card title="Admin workflow" icon="shield-halved">
+    Complete content management system with event editor, submissions moderation, featured event scheduler, and engagement analytics dashboard.
+  </Card>
+  
+  <Card title="Robust data management" icon="database">
+    Postgres-backed event store with CSV fallback, Google Sheets import/preview, coordinate caching, and automated backups.
+  </Card>
+  
+  <Card title="Security & performance" icon="bolt">
+    Rate-limited APIs, abuse protection, ISR caching, and serverless-optimized architecture for Vercel deployments.
+  </Card>
+</CardGroup>
+
+## Tech stack
+
+OOOC Fête Finder is built with modern technologies optimized for performance and developer experience:
+
+- **Framework**: Next.js 16 with App Router and React Server Components
+- **Database**: PostgreSQL with the `postgres` driver
+- **Styling**: Tailwind CSS 4 with custom design system
+- **UI Components**: Base UI (React) with custom components
+- **Maps**: MapLibre GL for interactive event maps
+- **Integrations**: Google Sheets API, Google Maps Geocoding API, Stripe webhooks
+- **Deployment**: Optimized for Vercel with ISR caching
+
+## Architecture highlights
+
+### Data flow
+
+In `DATA_MODE=remote` (production mode), events are read from:
+
+1. **Postgres event store** (primary source) — managed via `/admin/content`
+2. **Local CSV fallback** (`data/events.csv`) — used if Postgres is unavailable
+
+Google Sheets is used only for admin backup/preview and import — it's not a live runtime source.
+
+### Caching strategy
+
+The app uses Next.js built-in caching for optimal performance:
+
+- Homepage (`/`): ISR with 5-minute revalidation
+- Featured events: 60-second cache on lookups
+- Event detail pages: Dynamic rendering
+- Admin pages: Always fresh with `force-dynamic`
+
+### Identity and share links
+
+Each event has a stable, immutable **Event Key** (`evt_...`) used in share URLs:
+
+```
+/event/<eventKey>/<eventSlug>/
+```
+
+The `eventKey` is canonical; the `slug` is decorative for SEO. Share links redirect to the homepage modal state for a seamless browsing experience.
+
+## Get started
+
+<CardGroup cols={3}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Get the app running locally in minutes with our step-by-step guide.
+  </Card>
+  
+  <Card title="Environment setup" icon="gear" href="/environment-setup">
+    Configure all environment variables for development and production.
+  </Card>
+  
+  <Card title="Admin workflow" icon="user-lock" href="/admin/workflow">
+    Learn how to manage events, schedule features, and moderate submissions.
+  </Card>
+</CardGroup>
+
+## Common use cases
+
+<AccordionGroup>
+  <Accordion title="Running locally for development">
+    1. Clone the repository
+    2. Copy `.env.example` to `.env.local` and configure required variables
+    3. Run `pnpm install` to install dependencies
+    4. Set up Postgres and run `pnpm bootstrap:postgres-store`
+    5. Start the dev server with `pnpm dev`
+    
+    See the [Quick start guide](/quickstart) for detailed instructions.
+  </Accordion>
+  
+  <Accordion title="Deploying to production">
+    1. Set up a Postgres database (Vercel Postgres, Neon, etc.)
+    2. Configure environment variables in your deployment platform
+    3. Set `DATA_MODE=remote` (required in production)
+    4. Deploy to Vercel or your preferred platform
+    5. Run bootstrap script to seed initial data
+    6. Configure optional post-deploy revalidation webhook
+    
+    See [Deployment](/operations/deployment) for full details.
+  </Accordion>
+  
+  <Accordion title="Managing event content">
+    1. Access `/admin` with your admin credentials
+    2. Navigate to **Content** → **Event Editor**
+    3. Add, edit, or remove events
+    4. Use **Placements** → **Featured Events Manager** to schedule spotlights
+    5. Backup and revalidate from **Operations**
+    
+    See [Admin workflow](/admin/workflow) for comprehensive guidance.
+  </Accordion>
+  
+  <Accordion title="Importing events from Google Sheets">
+    1. Set up a Google Service Account with Sheets API access
+    2. Configure `GOOGLE_SERVICE_ACCOUNT_KEY` and `GOOGLE_SHEET_ID`
+    3. In `/admin/operations`, use **Import from Google Sheet**
+    4. Review and save the imported data
+    5. Revalidate to make changes live
+    
+    See [Google Sheets integration](/integrations/google-sheets) for details.
+  </Accordion>
+</AccordionGroup>
+
+## API endpoints
+
+OOOC Fête Finder provides several API endpoints:
+
+- **Public APIs**: Event submissions, tracking, user preferences
+- **Admin APIs**: Health checks, data store status, session management
+- **Webhooks**: Stripe payment processing, post-deploy revalidation
+- **Cron jobs**: Automated cleanup and backups
+
+Explore the [API Reference](/api/auth) for complete documentation.
+
+## Next steps
+
+<Steps>
+  <Step title="Set up your local environment">
+    Follow the [Quick start guide](/quickstart) to get the app running on your machine.
+  </Step>
+  
+  <Step title="Configure environment variables">
+    Review the [Environment setup](/environment-setup) to understand all configuration options.
+  </Step>
+  
+  <Step title="Understand the architecture">
+    Read the [Architecture overview](/architecture/overview) to learn how the app works.
+  </Step>
+  
+  <Step title="Learn the admin workflow">
+    Check out the [Admin workflow guide](/admin/workflow) to manage events effectively.
+  </Step>
+</Steps>
+
+## Need help?
+
+If you encounter issues or have questions:
+
+- Check the [Troubleshooting guide](/reference/troubleshooting)
+- Review [Logging and observability](/operations/logging)
+- Open an issue on [GitHub](https://github.com/KingPsychopath/oooc-fete-finder)

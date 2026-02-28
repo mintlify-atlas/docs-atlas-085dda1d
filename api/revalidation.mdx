@@ -1,0 +1,145 @@
+---
+title: Revalidation
+description: Force refresh cached event data via authenticated endpoint
+---
+
+## Overview
+
+The revalidation endpoint allows you to manually trigger a refresh of cached event data. This is useful after deploying data updates or when you need to force a cache invalidation.
+
+## Authentication
+
+This endpoint requires authentication using the `DEPLOY_REVALIDATE_SECRET` environment variable.
+
+<Warning>
+  The endpoint returns a `503 Service Unavailable` status if `DEPLOY_REVALIDATE_SECRET` is not configured.
+</Warning>
+
+## Endpoint
+
+### Trigger revalidation
+
+<CodeGroup>
+```bash POST
+curl -X POST https://your-domain.com/api/revalidate/deploy \
+  -H "Authorization: Bearer YOUR_DEPLOY_REVALIDATE_SECRET"
+```
+
+```bash GET
+curl https://your-domain.com/api/revalidate/deploy \
+  -H "Authorization: Bearer YOUR_DEPLOY_REVALIDATE_SECRET"
+```
+
+```bash Custom Header
+curl -X POST https://your-domain.com/api/revalidate/deploy \
+  -H "x-revalidate-secret: YOUR_DEPLOY_REVALIDATE_SECRET"
+```
+</CodeGroup>
+
+**Path:** `/api/revalidate/deploy`
+
+**Methods:** `GET`, `POST`
+
+**Headers:**
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token containing the `DEPLOY_REVALIDATE_SECRET` value.
+  
+  Format: `Bearer YOUR_DEPLOY_REVALIDATE_SECRET`
+</ParamField>
+
+<ParamField header="x-revalidate-secret" type="string">
+  Alternative to Authorization header. Provide the secret directly without "Bearer" prefix.
+</ParamField>
+
+<Note>
+  The endpoint accepts the secret via either the `Authorization` header (with "Bearer" prefix) or the `x-revalidate-secret` header.
+</Note>
+
+## Response
+
+### Success response
+
+<CodeGroup>
+```json 200 OK
+{
+  "success": true,
+  "message": "Events data refreshed successfully",
+  "count": 42,
+  "source": "live"
+}
+```
+</CodeGroup>
+
+<ResponseField name="success" type="boolean" required>
+  Indicates whether the revalidation was successful.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable description of the result.
+</ResponseField>
+
+<ResponseField name="count" type="number" required>
+  Number of events loaded after revalidation.
+</ResponseField>
+
+<ResponseField name="source" type="string" required>
+  Data source used for refresh (e.g., "live", "backup").
+</ResponseField>
+
+### Error responses
+
+<CodeGroup>
+```json 401 Unauthorized
+{
+  "success": false,
+  "error": "Unauthorized"
+}
+```
+
+```json 503 Service Unavailable
+{
+  "success": false,
+  "error": "DEPLOY_REVALIDATE_SECRET is not configured"
+}
+```
+
+```json 500 Internal Server Error
+{
+  "success": false,
+  "message": "Failed to refresh events data",
+  "error": "Live data reload failed"
+}
+```
+</CodeGroup>
+
+<ResponseField name="success" type="boolean" required>
+  Always `false` for error responses.
+</ResponseField>
+
+<ResponseField name="error" type="string" required>
+  Error message describing what went wrong.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Additional context about the error (for 500 errors).
+</ResponseField>
+
+## Status codes
+
+| Code | Description |
+|------|-------------|
+| 200  | Revalidation successful |
+| 401  | Missing or invalid authentication secret |
+| 500  | Internal server error during data refresh |
+| 503  | `DEPLOY_REVALIDATE_SECRET` not configured |
+
+## Implementation details
+
+The endpoint:
+1. Validates the provided secret against `DEPLOY_REVALIDATE_SECRET`
+2. Calls `forceRefreshEventsData()` to reload event data
+3. Returns the refresh result with event count and data source
+4. Sets no-cache headers to prevent response caching
+
+See implementation: `app/api/revalidate/deploy/route.ts:21`

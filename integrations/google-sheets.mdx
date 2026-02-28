@@ -1,0 +1,195 @@
+---
+title: Google Sheets integration
+description: Import event data from Google Sheets using service account authentication or public CSV URLs
+---
+
+OOOC Fête Finder imports event data from Google Sheets, supporting both private sheets (via service account) and public sheets (via CSV export URL). The integration fetches structured event data and converts it to CSV format for processing.
+
+## Authentication methods
+
+The integration supports two authentication strategies:
+
+1. **Service Account** - For private sheets with full API access
+2. **Public URL** - For publicly accessible sheets via CSV export
+
+### Service account authentication
+
+Service account authentication provides full access to private Google Sheets using OAuth 2.0 with JWT.
+
+<Steps>
+  <Step title="Create service account">
+    1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+    2. Create or select a project
+    3. Navigate to **IAM & Admin** > **Service Accounts**
+    4. Click **Create Service Account**
+    5. Download the JSON key file
+  </Step>
+
+  <Step title="Enable Sheets API">
+    1. Go to **APIs & Services** > **Library**
+    2. Search for "Google Sheets API"
+    3. Click **Enable**
+  </Step>
+
+  <Step title="Share sheet with service account">
+    1. Open your Google Sheet
+    2. Click **Share**
+    3. Add the service account email (found in JSON key)
+    4. Grant **Viewer** permissions
+  </Step>
+
+  <Step title="Configure environment">
+    Add service account credentials to your environment:
+
+    ```bash
+    GOOGLE_SHEET_ID=your_sheet_id_here
+    GOOGLE_SERVICE_ACCOUNT_KEY='{"client_email":"...","private_key":"..."}'
+    ```
+
+    <Note>
+      The service account key must be a compact JSON string on one line. Extract the sheet ID from the URL: `https://docs.google.com/spreadsheets/d/SHEET_ID/edit`
+    </Note>
+  </Step>
+</Steps>
+
+### Public URL authentication
+
+For public sheets, use the CSV export URL format:
+
+```bash
+REMOTE_CSV_URL=https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv
+```
+
+<Warning>
+  The sheet must be published to the web or accessible without authentication. Go to **File** > **Share** > **Publish to web** in Google Sheets.
+</Warning>
+
+## Implementation details
+
+### Service account flow
+
+The service account authentication flow (lib/google/sheets/api.ts:42-83):
+
+1. Load service account credentials from environment
+2. Create JWT with RS256 signature
+3. Exchange JWT for access token at `https://oauth2.googleapis.com/token`
+4. Use access token to fetch sheet data via Sheets API v4
+5. Convert response to CSV format
+
+```typescript
+// JWT claims
+const payload = {
+  iss: credentials.client_email,
+  scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
+  aud: "https://oauth2.googleapis.com/token",
+  exp: now + 3600, // 1 hour
+  iat: now,
+};
+```
+
+### API endpoints
+
+The integration uses these Google API endpoints:
+
+- **Token exchange**: `POST https://oauth2.googleapis.com/token`
+- **Sheets data**: `GET https://sheets.googleapis.com/v4/spreadsheets/{sheetId}/values/{range}`
+- **Public CSV**: `GET https://docs.google.com/spreadsheets/d/{sheetId}/export?format=csv&range={range}`
+
+### Fetch strategies
+
+The `fetchGoogleSheetsData` function (lib/google/sheets/api.ts:344-397) tries strategies in order:
+
+<Steps>
+  <Step title="Direct URL (public sheets)">
+    If `REMOTE_CSV_URL` is set, fetch the CSV directly without authentication.
+  </Step>
+
+  <Step title="Service account (private sheets)">
+    If `GOOGLE_SHEET_ID` and `GOOGLE_SERVICE_ACCOUNT_KEY` are set, use OAuth 2.0 JWT flow to fetch data via Sheets API.
+  </Step>
+
+  <Step title="Fallback">
+    If all strategies fail, return detailed error messages for debugging.
+  </Step>
+</Steps>
+
+## CSV conversion
+
+The integration converts Sheets API response to CSV format (lib/google/sheets/api.ts:201-241):
+
+- Normalizes rows to match header width
+- Pads missing trailing cells with empty strings
+- Escapes quotes and wraps cells containing commas, newlines, or quotes
+- Handles null/undefined values as empty strings
+
+## Configuration
+
+### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOOGLE_SHEET_ID` | Optional | Sheet ID extracted from URL |
+| `GOOGLE_SERVICE_ACCOUNT_KEY` | Optional | Compact JSON string with `client_email` and `private_key` |
+| `REMOTE_CSV_URL` | Optional | Direct CSV export URL for public sheets |
+
+<Info>
+  At least one of `REMOTE_CSV_URL` or both `GOOGLE_SHEET_ID` + `GOOGLE_SERVICE_ACCOUNT_KEY` must be configured for the integration to work.
+</Info>
+
+### Timeouts and limits
+
+- **Token exchange timeout**: 10 seconds
+- **Sheets API timeout**: 15 seconds
+- **Public CSV timeout**: 15 seconds
+- **Default range**: `A:Z` (all rows, columns A through Z)
+
+## Usage in admin panel
+
+The admin panel uses the integration to import event data:
+
+1. Navigate to **Admin** > **Events** > **Import**
+2. The system automatically fetches data using configured strategy
+3. Preview imported events before committing to database
+4. Validation runs on all imported rows
+
+## Error handling
+
+Common errors and solutions:
+
+<Warning>
+  **Service account configuration error**: Check that `GOOGLE_SERVICE_ACCOUNT_KEY` is valid JSON with `client_email` and `private_key` fields.
+</Warning>
+
+<Warning>
+  **Sheets API error 403**: The service account email is not shared with the sheet. Add it in sheet sharing settings with Viewer permissions.
+</Warning>
+
+<Warning>
+  **Token exchange failed**: Verify the service account key is valid and not expired. The private key must include `-----BEGIN PRIVATE KEY-----` and `-----END PRIVATE KEY-----` markers.
+</Warning>
+
+<Warning>
+  **Failed to fetch public CSV**: Ensure the sheet is published to the web or accessible without authentication.
+</Warning>
+
+## API reference
+
+The unified API is exported from lib/google/sheets/api.ts:402-408:
+
+```typescript
+export const GoogleSheetsAPI = {
+  fetchSheetsData: fetchGoogleSheetsData,
+  buildSheetsUrl: buildGoogleSheetsCSVUrl,
+  extractSheetId,
+  fetchPublicCSV: fetchPublicGoogleSheetsCSV,
+  fetchWithServiceAccount: fetchRemoteCSVWithServiceAccount,
+} as const;
+```
+
+### Methods
+
+- `fetchSheetsData(remoteUrl, sheetId, range)` - Main fetch function with fallback strategies
+- `buildSheetsUrl(sheetId, range)` - Build public CSV export URL
+- `extractSheetId(input)` - Extract sheet ID from URL or validate direct ID
+- `fetchPublicCSV(targetUrl)` - Fetch public CSV without authentication
+- `fetchWithServiceAccount(sheetId, range)` - Fetch using service account OAuth 2.0

@@ -1,0 +1,182 @@
+---
+title: Day-to-day admin workflow
+description: Standard workflows and daily operations for managing OOOC Fête Finder as an administrator
+---
+
+The admin console is split into focused modules for efficient event management. This guide covers the standard workflows you'll use daily.
+
+## Admin areas
+
+The admin panel provides five main areas accessible at `/admin`:
+
+- **Overview** (`/admin`) - Quick launch dashboard and system status
+- **Operations** (`/admin/operations`) - Runtime status, data store controls, session management, and recovery
+- **Content** (`/admin/content`) - Event sheet editor, submission moderation, and banner settings
+- **Placements** (`/admin/placements`) - Paid orders queue and spotlight/promoted scheduling
+- **Insights** (`/admin/insights`) - Engagement analytics and audience exports
+
+## Standard publish flow
+
+This is your primary workflow for updating live events.
+
+<Steps>
+  <Step title="Open the Content area">
+    Navigate to `/admin/content` to access the Event Sheet Editor
+  </Step>
+  
+  <Step title="Update events">
+    Edit event data in the spreadsheet interface. Changes autosave to Postgres every 850ms
+  </Step>
+  
+  <Step title="Review submissions (if needed)">
+    Check the Event Submissions section for new community-submitted events awaiting moderation
+  </Step>
+  
+  <Step title="Update banner (optional)">
+    Modify the sliding banner settings if you need to highlight announcements
+  </Step>
+  
+  <Step title="Create a safety snapshot">
+    Switch to `/admin/operations` and create a backup using **Backup Now** in Event Store Controls
+  </Step>
+  
+  <Step title="Publish changes">
+    Click **Save and Revalidate Homepage** to push your changes live
+  </Step>
+  
+  <Step title="Verify deployment">
+    Check the Live Runtime Snapshot to confirm your changes are reflected on the live site
+  </Step>
+</Steps>
+
+<Note>
+The Event Sheet Editor autosaves changes to Postgres, but homepage revalidation only happens when you click **Save and Revalidate Homepage**. This separation prevents accidental publishes.
+</Note>
+
+## Placements flow
+
+Manage paid promotions and spotlight features for partner events.
+
+<Steps>
+  <Step title="Open Placements">
+    Navigate to `/admin/placements` to access the placement scheduler
+  </Step>
+  
+  <Step title="Review paid orders">
+    Check the Paid Orders Queue for new partner promotion requests
+  </Step>
+  
+  <Step title="Fulfill orders">
+    Use the Spotlight & Promoted Scheduler to assign events to paid placement slots
+  </Step>
+  
+  <Step title="Confirm scheduling">
+    Verify queue status and timing in the scheduler timeline
+  </Step>
+  
+  <Step title="Share partner stats (optional)">
+    Generate and share engagement stats links with partners when needed
+  </Step>
+</Steps>
+
+<Info>
+Spotlight placements have a concurrent slot limit (default: 3 events), while Promoted placements support unlimited concurrent listings.
+</Info>
+
+## Insights flow
+
+Track event engagement and export audience segments.
+
+<Steps>
+  <Step title="Open Insights dashboard">
+    Navigate to `/admin/insights` to view analytics
+  </Step>
+  
+  <Step title="Review engagement metrics">
+    Use Event Engagement Stats to inspect:
+    - Views (`click` events)
+    - Outbound clicks (`outbound_click` to event URLs)
+    - Calendar saves (`calendar_sync` interactions)
+  </Step>
+  
+  <Step title="Analyze discovery patterns">
+    Review top events, discovery metrics, and conversion rates
+  </Step>
+  
+  <Step title="Export segments">
+    Download audience CSV segments filtered by genre preferences, search behavior, or filter usage
+  </Step>
+</Steps>
+
+<Warning>
+"Saved this" in the admin interface refers to calendar sync interactions tracked as aggregate engagement signals, not a user-visible personal saved events list.
+</Warning>
+
+## Rollback flow
+
+Revert to a previous version if something goes wrong.
+
+<Steps>
+  <Step title="Open Operations">
+    Navigate to `/admin/operations` immediately
+  </Step>
+  
+  <Step title="Select backup">
+    Choose **Latest Backup** or a specific snapshot from Recent Backups
+  </Step>
+  
+  <Step title="Restore data">
+    Click the restore button to revert the event data store
+  </Step>
+  
+  <Step title="Revalidate">
+    Run **Save and Revalidate Homepage** to push the restored data live
+  </Step>
+  
+  <Step title="Confirm restoration">
+    Check the Live Runtime Snapshot to verify the rollback succeeded
+  </Step>
+</Steps>
+
+## Health checks
+
+Use these endpoints to verify system status:
+
+```bash
+GET /api/admin/health
+GET /api/admin/data-store/status
+GET /api/admin/postgres/kv
+GET /api/admin/tokens/sessions
+```
+
+These endpoints provide real-time status for:
+- Admin service health
+- Data store connectivity
+- Postgres key-value store
+- Active admin sessions
+
+## Common issues
+
+### Save succeeds but site looks stale
+
+Run **Save and Revalidate Homepage** again and verify the runtime source shows your latest changes.
+
+### Spotlight/promoted schedule not applying
+
+Verify event keys match exactly in both the Event Sheet Editor and the placement queue. Check queue status in the Placements area.
+
+### Analytics panel empty
+
+Confirm Postgres connectivity in Operations and verify track routes are reachable from the client.
+
+### Submission endpoint closed
+
+Check Event Submissions settings in the Content area. Toggle the submission endpoint status if needed.
+
+## Best practices
+
+- **Always create backups** before major content updates
+- **Test placements** in upcoming slots before activating now
+- **Review spam signals** on submissions before accepting
+- **Export segments regularly** to track audience growth
+- **Monitor conversion rates** to optimize event selection and placement timing

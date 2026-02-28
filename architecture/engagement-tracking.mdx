@@ -1,0 +1,468 @@
+---
+title: Engagement tracking system
+description: First-party event tracking, social proof signals, and analytics architecture
+---
+
+OOOC Fête Finder includes a first-party engagement tracking system that powers social proof features, admin analytics, and partner campaign reporting.
+
+## What "saved this" means
+
+The social proof text "X people saved this" displayed on events maps to `calendar_sync` interactions.
+
+### User flow
+
+1. User views event in modal
+2. User clicks "Add to Calendar" button
+3. Calendar file downloads (.ics format)
+4. Client tracking sends `actionType=calendar_sync` to `POST /api/track`
+5. Engagement store increments count for that event
+6. Runtime projection adds `calendarSyncCount` to event data
+7. UI displays "X people saved this"
+
+<Info>
+This is a count of calendar sync interactions, not a persistent "saved list" feature. Users don't have individual saved collections.
+</Info>
+
+### Privacy boundaries
+
+Counts are aggregate only:
+- Public UI shows total count per event
+- No individual user identities are exposed
+- Session IDs are used for deduplication, not user tracking
+
+## Tracked event actions
+
+The `POST /api/track` endpoint accepts three action types:
+
+### Action types
+
+| Action Type | When Triggered | Purpose |
+|-------------|---------------|----------|
+| `click` | Event modal opened | View tracking and engagement |
+| `outbound_click` | External link clicked | Ticket/venue site clicks |
+| `calendar_sync` | Calendar downloaded | "Saved" social proof signal |
+
+### Tracking payload
+
+```typescript
+// features/events/engagement/types.ts
+export interface EventEngagementRecordInput {
+  eventKey: string                    // Canonical event identity
+  actionType: EventEngagementAction   // 'click' | 'outbound_click' | 'calendar_sync'
+  sessionId?: string | null           // Client-generated session ID
+  source?: string | null              // Traffic source
+  path?: string | null                // Page path
+  isAuthenticated?: boolean | null    // Auth status
+  recordedAt?: string                 // Timestamp
+}
+```
+
+### Client tracking implementation
+
+```typescript
+// features/events/engagement/client-tracking.ts
+import { trackEventEngagement } from '@/features/events/engagement/client-tracking'
+
+// Track calendar download
+trackEventEngagement({
+  eventKey: 'evt_ab12cd34ef56',
+  actionType: 'calendar_sync',
+  source: 'event_modal',
+  isAuthenticated: userSession?.email ? true : false
+})
+```
+
+<Accordion title="View full client tracking implementation">
+```typescript
+export const trackEventEngagement = (input: {
+  eventKey: string
+  actionType: EventEngagementAction
+  source?: string
+  isAuthenticated?: boolean
+}) => {
+  if (typeof window === 'undefined') return
+  
+  const payload = JSON.stringify({
+    eventKey: input.eventKey,
+    actionType: input.actionType,
+    sessionId: getOrCreateSessionId(),
+    source: input.source,
+    path: window.location.pathname,
+    isAuthenticated: input.isAuthenticated ?? false
+  })
+  
+  // Try sendBeacon first for reliability on page unload
+  try {
+    if (typeof navigator.sendBeacon === 'function') {
+      const blob = new Blob([payload], { type: 'application/json' })
+      const sent = navigator.sendBeacon('/api/track', blob)
+      if (sent) return
+    }
+  } catch {}
+  
+  // Fallback to fetch
+  void fetch('/api/track', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+    keepalive: true
+  }).catch(() => undefined)
+}
+```
+</Accordion>
+
+### Session ID generation
+
+Sessions are client-generated and stored in localStorage:
+
+```typescript
+const SESSION_STORAGE_KEY = 'oooc:event-engagement-session'
+
+const getOrCreateSessionId = (): string | null => {
+  if (typeof window === 'undefined') return null
+  
+  try {
+    const stored = window.localStorage.getItem(SESSION_STORAGE_KEY)
+    if (stored) return stored.trim()
+    
+    const created = crypto.randomUUID()
+    window.localStorage.setItem(SESSION_STORAGE_KEY, created)
+    return created
+  } catch {
+    return null
+  }
+}
+```
+
+<Note>
+Session IDs are used for deduplication (counting unique viewers) and are not tied to user accounts.
+</Note>
+
+## Database schema
+
+Engagement data is stored in Postgres:
+
+```sql
+CREATE TABLE app_event_engagement_stats (
+  id SERIAL PRIMARY KEY,
+  event_key VARCHAR(255) NOT NULL,
+  action_type VARCHAR(50) NOT NULL,  -- 'click' | 'outbound_click' | 'calendar_sync'
+  session_id VARCHAR(255),
+  source VARCHAR(255),
+  path VARCHAR(500),
+  is_authenticated BOOLEAN DEFAULT FALSE,
+  recorded_at TIMESTAMP DEFAULT NOW()
+)
+
+CREATE INDEX idx_event_engagement_event_key ON app_event_engagement_stats(event_key)
+CREATE INDEX idx_event_engagement_action_type ON app_event_engagement_stats(action_type)
+CREATE INDEX idx_event_engagement_recorded_at ON app_event_engagement_stats(recorded_at)
+```
+
+## Runtime projection
+
+Engagement counts are projected onto event data:
+
+```typescript
+// features/data-management/runtime-service.ts
+const eventsResult = await getLiveEvents({
+  includeEngagementProjection: true  // Enabled by default
+})
+
+// Inside projection logic:
+const repo = await getEventEngagementRepository()
+const stats = await repo.getCalendarSyncCountsByEventKeys(
+  events.map(e => e.eventKey)
+)
+
+for (const event of events) {
+  event.calendarSyncCount = stats.get(event.eventKey) ?? 0
+}
+```
+
+<Info>
+Projection is enabled by default for public routes. Admin analytics can disable it to get raw event data without projection overhead.
+</Info>
+
+## Rate limiting
+
+Tracking endpoints are rate-limited to prevent abuse:
+
+```typescript
+// Limits for POST /api/track
+- 100 requests per 10 minutes per IP
+- 200 requests per 10 minutes per session
+```
+
+Blocked requests receive `429 Too Many Requests` with `Retry-After` header.
+
+## Discovery analytics
+
+Separate tracking for search and filter behavior:
+
+### Discovery actions
+
+```typescript
+// features/events/engagement/client-tracking.ts
+import { trackDiscoveryAnalytics } from '@/features/events/engagement/client-tracking'
+
+// Track search
+trackDiscoveryAnalytics({
+  actionType: 'search',
+  searchQuery: 'jazz'
+})
+
+// Track filter application
+trackDiscoveryAnalytics({
+  actionType: 'filter_apply',
+  filterGroup: 'genre',
+  filterValue: 'Jazz'
+})
+
+// Track filter clear
+trackDiscoveryAnalytics({
+  actionType: 'filter_clear',
+  filterGroup: 'genre'
+})
+```
+
+### Discovery database schema
+
+```sql
+CREATE TABLE app_discovery_analytics_stats (
+  id SERIAL PRIMARY KEY,
+  action_type VARCHAR(50) NOT NULL,  -- 'search' | 'filter_apply' | 'filter_clear'
+  session_id VARCHAR(255),
+  filter_group VARCHAR(100),
+  filter_value VARCHAR(500),
+  search_query VARCHAR(500),
+  path VARCHAR(500),
+  recorded_at TIMESTAMP DEFAULT NOW()
+)
+```
+
+## Genre preferences
+
+Authenticated users can signal genre preferences:
+
+```typescript
+// features/events/engagement/client-tracking.ts
+import { trackGenrePreference } from '@/features/events/engagement/client-tracking'
+
+// User clicks genre tag or expresses preference
+trackGenrePreference('Jazz')
+```
+
+Preferences are stored per user email:
+
+```sql
+CREATE TABLE app_user_genre_preferences (
+  id SERIAL PRIMARY KEY,
+  user_email VARCHAR(255) NOT NULL,
+  genre VARCHAR(100) NOT NULL,
+  preference_count INTEGER DEFAULT 1,
+  last_updated TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_email, genre)
+)
+```
+
+<Warning>
+Genre preference tracking requires user authentication. Anonymous visitors cannot save preferences.
+</Warning>
+
+## Admin analytics dashboard
+
+Analytics are available in `/admin/insights`:
+
+### Dashboard metrics
+
+```typescript
+// features/events/engagement/actions.ts
+export async function getEventEngagementDashboard(
+  windowDays = 30
+): Promise<DashboardResult> {
+  // Returns:
+  // - Total clicks, views, outbound, calendar syncs
+  // - Unique session counts
+  // - Interaction rates (outbound rate, calendar rate)
+  // - Daily time series
+  // - Per-event breakdowns
+  // - Top searches and filters
+}
+```
+
+### Summary metrics
+
+```typescript
+interface EngagementSummary {
+  clickCount: number                    // Total event opens
+  dedupedViewCount: number              // Unique views (deduped by session)
+  outboundClickCount: number            // External link clicks
+  calendarSyncCount: number             // Calendar downloads
+  uniqueSessionCount: number            // Distinct sessions
+  uniqueViewSessionCount: number        // Sessions with views
+  uniqueOutboundSessionCount: number    // Sessions with outbound clicks
+  uniqueCalendarSessionCount: number    // Sessions with calendar syncs
+  outboundSessionRate: number           // % sessions with outbound click
+  calendarSessionRate: number           // % sessions with calendar sync
+  outboundInteractionRate: number       // Outbound / views
+  calendarInteractionRate: number       // Calendar / views
+}
+```
+
+### Per-event metrics
+
+```typescript
+interface EventEngagementMetrics {
+  eventKey: string
+  eventName: string
+  clickCount: number
+  dedupedViewCount: number
+  outboundClickCount: number
+  calendarSyncCount: number
+  uniqueSessionCount: number
+  conversionRate: number                // Calendar / views
+}
+```
+
+<Accordion title="View engagement projection query">
+```typescript
+// lib/platform/postgres/event-engagement-repository.ts
+export async function getCalendarSyncCountsByEventKeys(
+  eventKeys: string[]
+): Promise<Map<string, number>> {
+  const query = `
+    SELECT event_key, COUNT(*) as sync_count
+    FROM app_event_engagement_stats
+    WHERE action_type = 'calendar_sync'
+      AND event_key = ANY($1)
+    GROUP BY event_key
+  `
+  
+  const result = await db.query(query, [eventKeys])
+  return new Map(
+    result.rows.map(row => [row.event_key, parseInt(row.sync_count)])
+  )
+}
+```
+</Accordion>
+
+## Search query clustering
+
+The admin dashboard clusters similar search queries:
+
+```typescript
+// features/events/engagement/search-query-clustering.ts
+export function clusterTopSearchQueries(
+  queries: Array<{ query: string; hitCount: number }>,
+  mode: 'conservative' | 'aggressive' = 'conservative'
+): Array<{ label: string; hitCount: number; variants: string[] }>
+```
+
+Clustering modes:
+- **Conservative**: Only clusters very similar queries (edit distance ≤ 2)
+- **Aggressive**: More aggressive merging of related queries
+
+## Audience segmentation
+
+Export audience data with filters applied:
+
+```typescript
+// features/events/engagement/actions.ts
+export async function exportAudienceSegmentation(
+  filterOptions: {
+    minInteractions?: number
+    hasCalendarSync?: boolean
+    hasOutboundClick?: boolean
+    topGenres?: string[]
+  }
+): Promise<string> {
+  // Returns CSV with:
+  // - User email (if authenticated)
+  // - Session ID
+  // - Interaction counts
+  // - Preferred genres
+  // - Last activity timestamp
+}
+```
+
+## Partner campaign reporting
+
+Partner stats are derived from engagement tracking:
+
+```typescript
+// GET /api/partner-stats/[activationId]?token=xxx
+interface PartnerStatsResponse {
+  activation: {
+    id: string
+    eventKey: string
+    eventName: string
+    placementType: 'spotlight' | 'promoted'
+    startedAt: string
+    endedAt: string | null
+  }
+  metrics: {
+    viewCount: number
+    uniqueViewers: number
+    outboundClickCount: number
+    calendarSyncCount: number
+    outboundRate: number    // % of views that clicked outbound
+    saveRate: number        // % of views that saved to calendar
+  }
+}
+```
+
+<Info>
+Partner stats can be exported as CSV using the `format=csv` query parameter.
+</Info>
+
+## Privacy and compliance
+
+### Data collected
+
+- Event interactions (anonymous or authenticated)
+- Session IDs (client-generated, not user accounts)
+- Traffic source and page path
+- User email (only for authenticated preference tracking)
+
+### Data NOT collected
+
+- IP addresses are not stored (only used for rate limiting)
+- Personal information beyond email
+- Browsing history outside the app
+- Device fingerprinting
+
+### Rate limiter privacy
+
+```typescript
+// features/security/rate-limiter.ts
+// IP addresses are HMAC-hashed before storage
+const hashedIp = createHmac('sha256', AUTH_SECRET)
+  .update(clientIp)
+  .digest('hex')
+  .slice(0, 16)
+
+// Rate limit keys use hashed values
+const limitKey = `rate:track:ip:${hashedIp}`
+```
+
+<Warning>
+Sensitive identifiers (IP addresses, email+IP pairs) are HMAC-hashed with `AUTH_SECRET` before use in rate limiter keys or log context.
+</Warning>
+
+## Related documentation
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" href="/architecture/overview" icon="sitemap">
+    System architecture and engagement contract
+  </Card>
+  <Card title="Event identity" href="/architecture/event-identity" icon="fingerprint">
+    How event keys enable per-event tracking
+  </Card>
+  <Card title="Rate limiting" href="/security/rate-limiting" icon="shield-halved">
+    Abuse protection for tracking endpoints
+  </Card>
+  <Card title="Admin workflow" href="/admin/workflow" icon="user-gear">
+    Accessing analytics dashboard
+  </Card>
+</CardGroup>

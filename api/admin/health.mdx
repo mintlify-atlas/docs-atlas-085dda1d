@@ -1,0 +1,252 @@
+---
+title: Health check
+description: Check system health and data store status
+---
+
+The health endpoint provides a comprehensive health check of the system, including data store connectivity, event counts, and configuration status.
+
+## Get system health status
+
+<CodeGroup>
+```bash Request
+GET /api/admin/health
+```
+</CodeGroup>
+
+### Authentication
+
+<Warning>
+This endpoint requires admin authentication. Include one of the following:
+- `x-admin-key` header with your admin key
+- `Authorization: Bearer <token>` header with a valid admin session token
+- Valid admin session cookie
+</Warning>
+
+### Response
+
+Returns comprehensive system health information including connectivity status, data counts, and warnings.
+
+<ResponseField name="success" type="boolean" required>
+  Whether the health check succeeded
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp of the health check
+</ResponseField>
+
+<ResponseField name="connectivity" type="object" required>
+  Database and store connectivity status
+  
+  <ResponseField name="connectivity.postgresConfigured" type="boolean">
+    Whether Postgres is configured
+  </ResponseField>
+  
+  <ResponseField name="connectivity.postgresTable" type="string">
+    Name of the Postgres KV store table
+  </ResponseField>
+  
+  <ResponseField name="connectivity.postgresReachable" type="boolean">
+    Whether Postgres is reachable
+  </ResponseField>
+  
+  <ResponseField name="connectivity.eventStoreReachable" type="boolean">
+    Whether the event store is reachable
+  </ResponseField>
+  
+  <ResponseField name="connectivity.storeProvider" type="string">
+    The active store provider (e.g., "postgres", "vercel")
+  </ResponseField>
+  
+  <ResponseField name="connectivity.storeProviderLocation" type="string">
+    Location identifier for the store provider
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="mode" type="object" required>
+  Data source configuration and mode
+  
+  <ResponseField name="mode.configuredDataMode" type="string">
+    Configured data source mode
+  </ResponseField>
+  
+  <ResponseField name="mode.liveDataSource" type="string">
+    Currently active data source
+  </ResponseField>
+  
+  <ResponseField name="mode.remoteConfigured" type="boolean">
+    Whether remote data source is configured
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="counts" type="object" required>
+  Event count metrics across different layers
+  
+  <ResponseField name="counts.storeMetadataRows" type="number">
+    Row count from store metadata
+  </ResponseField>
+  
+  <ResponseField name="counts.csvRawRows" type="number">
+    Raw row count from CSV (excluding header)
+  </ResponseField>
+  
+  <ResponseField name="counts.parsedEvents" type="number">
+    Number of successfully parsed events
+  </ResponseField>
+  
+  <ResponseField name="counts.liveRuntimeEvents" type="number">
+    Current event count in runtime
+  </ResponseField>
+  
+  <ResponseField name="counts.liveEvents" type="number">
+    Alias for liveRuntimeEvents
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="store" type="object" required>
+  Data store status and metadata
+  
+  <ResponseField name="store.hasStoreData" type="boolean">
+    Whether the store contains data
+  </ResponseField>
+  
+  <ResponseField name="store.keyCount" type="number">
+    Number of keys in the store
+  </ResponseField>
+  
+  <ResponseField name="store.updatedAt" type="string | null">
+    Last update timestamp
+  </ResponseField>
+  
+  <ResponseField name="store.updatedBy" type="string">
+    Identity of the last updater
+  </ResponseField>
+  
+  <ResponseField name="store.origin" type="string">
+    Origin of the data (e.g., "manual", "import")
+  </ResponseField>
+  
+  <ResponseField name="store.postgresEventTables" type="object">
+    Postgres event table statistics
+    
+    <ResponseField name="store.postgresEventTables.rowCount" type="number">
+      Number of rows in event tables
+    </ResponseField>
+    
+    <ResponseField name="store.postgresEventTables.columnCount" type="number">
+      Number of columns in event tables
+    </ResponseField>
+    
+    <ResponseField name="store.postgresEventTables.meta" type="object">
+      Event table metadata including updatedAt, updatedBy, origin, and checksum
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="warnings" type="object" required>
+  Data validation warnings and mismatches
+  
+  <ResponseField name="warnings.parsingWarnings" type="string[]">
+    Warnings encountered during CSV parsing
+  </ResponseField>
+  
+  <ResponseField name="warnings.countMismatches" type="string[]">
+    Descriptions of count discrepancies between data layers
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="runtime" type="object" required>
+  Runtime status information
+  
+  <ResponseField name="runtime.lastCheckTime" type="string | null">
+    Last time runtime data was checked
+  </ResponseField>
+  
+  <ResponseField name="runtime.lastErrorMessage" type="string | null">
+    Last error message from remote data fetch (if any)
+  </ResponseField>
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "success": true,
+  "timestamp": "2026-02-28T10:30:00.000Z",
+  "connectivity": {
+    "postgresConfigured": true,
+    "postgresTable": "app_kv_store",
+    "postgresReachable": true,
+    "eventStoreReachable": true,
+    "storeProvider": "postgres",
+    "storeProviderLocation": "us-east-1"
+  },
+  "mode": {
+    "configuredDataMode": "store",
+    "liveDataSource": "store",
+    "remoteConfigured": false
+  },
+  "counts": {
+    "storeMetadataRows": 150,
+    "csvRawRows": 150,
+    "parsedEvents": 148,
+    "liveRuntimeEvents": 148,
+    "liveEvents": 148
+  },
+  "store": {
+    "hasStoreData": true,
+    "keyCount": 3,
+    "updatedAt": "2026-02-28T08:15:00.000Z",
+    "updatedBy": "admin@example.com",
+    "origin": "import",
+    "postgresEventTables": {
+      "rowCount": 150,
+      "columnCount": 25,
+      "meta": {
+        "rowCount": 150,
+        "updatedAt": "2026-02-28T08:15:00.000Z",
+        "updatedBy": "admin@example.com",
+        "origin": "import",
+        "checksum": "abc123..."
+      }
+    }
+  },
+  "warnings": {
+    "parsingWarnings": [],
+    "countMismatches": [
+      "Parsed event count (148) differs from raw CSV rows (150); this usually means rows were filtered/invalid during parsing"
+    ]
+  },
+  "runtime": {
+    "lastCheckTime": "2026-02-28T10:29:55.000Z",
+    "lastErrorMessage": null
+  }
+}
+```
+
+### Error responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+**401 Unauthorized**
+
+```json
+{
+  "success": false,
+  "error": "Unauthorized"
+}
+```
+
+**500 Internal Server Error**
+
+```json
+{
+  "success": false,
+  "error": "Database connection failed"
+}
+```
+
+<Note>
+This endpoint performs extensive validation and comparison of event counts across multiple data layers. Count mismatches are expected during data transitions and are reported in the warnings section rather than causing failures.
+</Note>

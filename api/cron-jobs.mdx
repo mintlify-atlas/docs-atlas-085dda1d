@@ -1,0 +1,258 @@
+---
+title: Cron jobs
+description: Scheduled maintenance and cleanup tasks
+---
+
+## Overview
+
+Cron job endpoints are scheduled tasks that run automatically at specified intervals. These endpoints handle maintenance operations like cleaning up expired sessions, rate limits, and creating backups.
+
+<Note>
+  All cron endpoints are secured with the `CRON_SECRET` environment variable and are automatically invoked by Vercel's cron scheduler.
+</Note>
+
+## Authentication
+
+All cron endpoints require Bearer token authentication:
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token containing the `CRON_SECRET` value.
+  
+  Format: `Bearer YOUR_CRON_SECRET`
+  
+  Vercel automatically sends this header when invoking scheduled cron jobs.
+</ParamField>
+
+<Warning>
+  Requests without a valid `CRON_SECRET` will receive a `401 Unauthorized` response.
+</Warning>
+
+## Endpoints
+
+### Cleanup admin sessions
+
+Deletes expired admin session records that are older than 7 days.
+
+**Path:** `/api/cron/cleanup-admin-sessions`
+
+**Method:** `GET`
+
+**Schedule:** Daily at 4:00 AM UTC (`0 4 * * *`)
+
+<CodeGroup>
+```bash cURL
+curl https://your-domain.com/api/cron/cleanup-admin-sessions \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"
+```
+
+```json Response
+{
+  "ok": true,
+  "deleted": 5
+}
+```
+</CodeGroup>
+
+<ResponseField name="ok" type="boolean" required>
+  Indicates whether the cleanup was successful.
+</ResponseField>
+
+<ResponseField name="deleted" type="number" required>
+  Number of expired admin sessions deleted.
+</ResponseField>
+
+See implementation: `app/api/cron/cleanup-admin-sessions/route.ts:9`
+
+---
+
+### Cleanup rate limits
+
+Deletes stale authentication verification rate limit counters.
+
+**Path:** `/api/cron/cleanup-rate-limits`
+
+**Method:** `GET`
+
+**Schedule:** Daily at 4:10 AM UTC (`10 4 * * *`)
+
+<CodeGroup>
+```bash cURL
+curl https://your-domain.com/api/cron/cleanup-rate-limits \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"
+```
+
+```json Response
+{
+  "ok": true,
+  "deleted": 12
+}
+```
+</CodeGroup>
+
+<ResponseField name="ok" type="boolean" required>
+  Indicates whether the cleanup was successful.
+</ResponseField>
+
+<ResponseField name="deleted" type="number" required>
+  Number of rate limit records deleted.
+</ResponseField>
+
+See implementation: `app/api/cron/cleanup-rate-limits/route.ts:9`
+
+---
+
+### Backup event store
+
+Creates periodic backups of the event store CSV payload.
+
+**Path:** `/api/cron/backup-event-store`
+
+**Method:** `GET`
+
+**Schedule:** Daily at 4:20 AM UTC (`20 4 * * *`)
+
+<CodeGroup>
+```bash cURL
+curl https://your-domain.com/api/cron/backup-event-store \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"
+```
+
+```json Success Response
+{
+  "ok": true,
+  "message": "Backup created successfully",
+  "backup": {
+    "id": "backup_123",
+    "created_at": "2026-02-28T04:20:00Z",
+    "size_bytes": 51200,
+    "event_count": 42
+  },
+  "prunedCount": 2
+}
+```
+
+```json Skipped Response
+{
+  "ok": true,
+  "skipped": true,
+  "message": "No data available for backup"
+}
+```
+</CodeGroup>
+
+<ResponseField name="ok" type="boolean" required>
+  Indicates whether the backup operation completed successfully.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable description of the result.
+</ResponseField>
+
+<ResponseField name="backup" type="object">
+  Backup metadata (only present when backup was created).
+</ResponseField>
+
+<ResponseField name="prunedCount" type="number">
+  Number of old backups that were deleted to maintain retention limits.
+</ResponseField>
+
+<ResponseField name="skipped" type="boolean">
+  Indicates the backup was skipped (e.g., no data available).
+</ResponseField>
+
+See implementation: `app/api/cron/backup-event-store/route.ts:9`
+
+## Error responses
+
+All cron endpoints use a consistent error response format:
+
+<CodeGroup>
+```json 401 Unauthorized
+{
+  "error": "Unauthorized"
+}
+```
+
+```json 500 Internal Server Error
+{
+  "ok": false,
+  "error": "Database connection failed"
+}
+```
+</CodeGroup>
+
+<ResponseField name="error" type="string" required>
+  Error message describing what went wrong.
+</ResponseField>
+
+<ResponseField name="ok" type="boolean">
+  Always `false` for 500 errors.
+</ResponseField>
+
+## Status codes
+
+| Code | Description |
+|------|-------------|
+| 200  | Operation completed successfully |
+| 401  | Missing or invalid `CRON_SECRET` |
+| 500  | Internal server error during execution |
+
+## Cron schedule configuration
+
+Cron jobs are configured in `vercel.json`:
+
+```json vercel.json
+{
+  "crons": [
+    {
+      "path": "/api/cron/cleanup-admin-sessions",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/cleanup-rate-limits",
+      "schedule": "10 4 * * *"
+    },
+    {
+      "path": "/api/cron/backup-event-store",
+      "schedule": "20 4 * * *"
+    }
+  ]
+}
+```
+
+<Note>
+  Schedule format uses standard cron syntax: `minute hour day month weekday`
+  
+  All times are in UTC.
+</Note>
+
+## Environment variables
+
+<ParamField path="CRON_SECRET" type="string" required>
+  Secret token used to authenticate cron job requests.
+  
+  Set this in your Vercel project environment variables. Vercel automatically includes it in the `Authorization` header when invoking scheduled crons.
+</ParamField>
+
+## Implementation details
+
+All cron endpoints follow a consistent pattern:
+
+1. Extract Bearer token from `Authorization` header
+2. Validate token against `CRON_SECRET` environment variable
+3. Execute the scheduled task (cleanup, backup, etc.)
+4. Return operation results with appropriate status codes
+5. Set no-cache headers to prevent response caching
+
+## Manual invocation
+
+While cron jobs run automatically on schedule, you can manually trigger them for testing:
+
+```bash
+curl https://your-domain.com/api/cron/cleanup-admin-sessions \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"
+```
+
+<Warning>
+  Only invoke cron endpoints manually for testing or emergency maintenance. Normal operations should rely on the automatic schedule.
+</Warning>

@@ -1,0 +1,333 @@
+---
+title: Stripe webhook integration
+description: Process partner activation payments via Stripe webhooks with signature verification and custom field extraction
+---
+
+OOOC Fête Finder receives partner activation payments through Stripe Payment Links. The webhook integration processes `checkout.session.completed` events, verifies signatures, extracts custom fields, and enqueues activations in the admin panel.
+
+## Configuration
+
+### Environment variables
+
+```bash
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+# Optional: Payment link ID mapping for admin queue labels
+STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_STANDARD=plink_...
+STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_TAKEOVER=plink_...
+STRIPE_PAYMENT_LINK_ID_PROMOTED=plink_...
+STRIPE_PAYMENT_LINK_ID_ADDON_WHATSAPP=plink_...
+STRIPE_PAYMENT_LINK_ID_ADDON_NEWSLETTER=plink_...
+```
+
+<Warning>
+  If `STRIPE_WEBHOOK_SECRET` is not set, the webhook endpoint returns HTTP 503 and logs a warning.
+</Warning>
+
+### Get webhook secret
+
+<Steps>
+  <Step title="Create webhook endpoint">
+    1. Go to [Stripe Dashboard](https://dashboard.stripe.com/webhooks)
+    2. Click **Add endpoint**
+    3. Enter your webhook URL: `https://your-domain.com/api/webhooks/stripe`
+    4. Select event: `checkout.session.completed`
+  </Step>
+
+  <Step title="Copy signing secret">
+    After creating the endpoint, Stripe displays the signing secret starting with `whsec_`.
+
+    Copy this value.
+  </Step>
+
+  <Step title="Configure environment">
+    Add the webhook secret to your environment:
+
+    ```bash
+    STRIPE_WEBHOOK_SECRET=whsec_...
+    ```
+  </Step>
+</Steps>
+
+## Webhook endpoint
+
+The webhook is handled by `POST /api/webhooks/stripe` (app/api/webhooks/stripe/route.ts:10-50):
+
+<Steps>
+  <Step title="Verify signature">
+    Extract `stripe-signature` header and verify webhook authenticity using HMAC SHA256.
+  </Step>
+
+  <Step title="Parse payload">
+    Parse JSON payload and extract event type and data.
+  </Step>
+
+  <Step title="Process event">
+    If event type is `checkout.session.completed`, extract session details and enqueue activation.
+  </Step>
+
+  <Step title="Return response">
+    Return HTTP 200 with `{ok: true, handled: boolean, inserted: boolean}`.
+  </Step>
+</Steps>
+
+### Response codes
+
+- **200 OK**: Webhook processed successfully
+- **400 Bad Request**: Invalid signature
+- **500 Internal Server Error**: Processing failed
+- **503 Service Unavailable**: Webhook not configured
+
+## Signature verification
+
+Stripe signs webhooks using HMAC SHA256 with the webhook secret (features/partners/stripe-webhook.ts:51-75).
+
+### Signature format
+
+The `stripe-signature` header contains:
+
+```
+t=1614556800,v1=signature1,v1=signature2
+```
+
+- `t`: Unix timestamp of the event
+- `v1`: HMAC SHA256 signature(s)
+
+### Verification algorithm
+
+<Steps>
+  <Step title="Parse signature header">
+    Extract timestamp and v1 signatures.
+  </Step>
+
+  <Step title="Check timestamp">
+    Verify event is within 5 minutes (300 seconds) of current time to prevent replay attacks.
+  </Step>
+
+  <Step title="Compute expected signature">
+    ```typescript
+    const signedPayload = `${timestamp}.${payload}`;
+    const expected = createHmac('sha256', secret)
+      .update(signedPayload, 'utf8')
+      .digest('hex');
+    ```
+  </Step>
+
+  <Step title="Compare signatures">
+    Use timing-safe comparison to check if any provided signature matches the expected signature.
+  </Step>
+</Steps>
+
+<Warning>
+  **Invalid signature**: If signature verification fails, the webhook returns HTTP 400 and the event is not processed. Check that `STRIPE_WEBHOOK_SECRET` matches the value in Stripe Dashboard.
+</Warning>
+
+## Session data extraction
+
+The integration extracts data from the `checkout.session.completed` event (features/partners/stripe-webhook.ts:150-201):
+
+### Custom fields
+
+Stripe custom fields are extracted with fallback key matching:
+
+```typescript
+// Event name: tries "event_name", "eventname"
+const eventName = extractCustomFieldValue(
+  customFields,
+  ['event_name', 'eventname']
+);
+
+// Event URL: tries "event_url", "event_link", "ticket_link", "eventurl"
+const eventUrl = extractCustomFieldValue(
+  customFields,
+  ['event_url', 'event_link', 'ticket_link', 'eventurl']
+);
+```
+
+<Info>
+  Custom field extraction supports text, dropdown, and numeric field types. Field keys are case-insensitive.
+</Info>
+
+### Payment link ID mapping
+
+The system maps payment link IDs to package keys for admin queue organization:
+
+| Payment Link Env Var | Package Key |
+|----------------------|-------------|
+| `STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_STANDARD` | `spotlight-standard` |
+| `STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_TAKEOVER` | `spotlight-takeover` |
+| `STRIPE_PAYMENT_LINK_ID_PROMOTED` | `promoted-listing` |
+| `STRIPE_PAYMENT_LINK_ID_ADDON_WHATSAPP` | `addon-whatsapp` |
+| `STRIPE_PAYMENT_LINK_ID_ADDON_NEWSLETTER` | `addon-newsletter` |
+
+<Note>
+  If payment link ID doesn't match any configured mapping, `packageKey` is `null` and the admin must manually categorize the activation.
+</Note>
+
+### Extracted fields
+
+The following fields are extracted from the session:
+
+```typescript
+{
+  packageKey: string | null,           // Mapped from payment link ID
+  paymentLinkId: string | null,        // Payment link ID
+  stripeSessionId: string | null,      // Checkout session ID
+  customerEmail: string | null,        // Customer email
+  customerName: string | null,         // Customer name
+  eventName: string | null,            // From custom field or metadata
+  eventUrl: string | null,             // From custom field or metadata
+  amountTotalCents: number | null,     // Total amount in cents
+  currency: string | null,             // Currency code (e.g., "eur")
+  metadata: Record<string, unknown>,   // Session metadata
+}
+```
+
+## Database storage
+
+The webhook handler enqueues activations in the `partner_activations` table via `enqueueFromStripe` (features/partners/stripe-webhook.ts:203-233):
+
+```typescript
+await repository.enqueueFromStripe({
+  sourceEventId: event.id,           // Stripe event ID (for idempotency)
+  packageKey: details.packageKey,
+  paymentLinkId: details.paymentLinkId,
+  stripeSessionId: details.stripeSessionId,
+  customerEmail: details.customerEmail,
+  customerName: details.customerName,
+  eventName: details.eventName,
+  eventUrl: details.eventUrl,
+  amountTotalCents: details.amountTotalCents,
+  currency: details.currency,
+  metadata: details.metadata,
+  rawPayload: {
+    type: 'checkout.session.completed',
+    session,
+  },
+});
+```
+
+### Idempotency
+
+The `sourceEventId` (Stripe event ID) ensures idempotency. If the same event is received multiple times, only the first insert succeeds.
+
+<Info>
+  The database schema includes a unique constraint on `source_event_id` to prevent duplicate processing.
+</Info>
+
+## Admin panel workflow
+
+After webhook processing:
+
+1. Activation appears in **Admin** > **Partners** > **Queue**
+2. Admin reviews customer details, event info, and package
+3. Admin manually activates the event or requests more information
+4. Activation is marked as complete or rejected
+
+## Error handling
+
+The integration handles errors at multiple levels:
+
+### Webhook endpoint errors
+
+<Warning>
+  **Webhook not configured** (503): `STRIPE_WEBHOOK_SECRET` is not set in environment.
+</Warning>
+
+<Warning>
+  **Invalid signature** (400): Signature verification failed. Check that webhook secret matches Stripe Dashboard.
+</Warning>
+
+<Warning>
+  **Webhook processing failed** (500): Database error or unexpected payload structure. Check server logs for details.
+</Warning>
+
+### Payload validation
+
+If the payload is missing required fields, the webhook returns `{handled: false}`:
+
+- Missing event type
+- Missing event ID
+- Missing or invalid session object
+
+### Database errors
+
+If the database is not configured or insert fails, the webhook throws an error and returns HTTP 500. Stripe will retry the webhook.
+
+## Testing webhooks
+
+### Local testing with Stripe CLI
+
+<Steps>
+  <Step title="Install Stripe CLI">
+    Download from [stripe.com/docs/stripe-cli](https://stripe.com/docs/stripe-cli)
+  </Step>
+
+  <Step title="Login to Stripe">
+    ```bash
+    stripe login
+    ```
+  </Step>
+
+  <Step title="Forward webhooks to localhost">
+    ```bash
+    stripe listen --forward-to localhost:3000/api/webhooks/stripe
+    ```
+
+    The CLI displays a webhook signing secret starting with `whsec_`. Use this for `STRIPE_WEBHOOK_SECRET` during local development.
+  </Step>
+
+  <Step title="Trigger test events">
+    ```bash
+    stripe trigger checkout.session.completed
+    ```
+  </Step>
+</Steps>
+
+### Manual testing
+
+Use Stripe Dashboard to send test webhooks:
+
+1. Go to [Stripe Dashboard](https://dashboard.stripe.com/webhooks) > **Webhooks**
+2. Select your webhook endpoint
+3. Click **Send test webhook**
+4. Choose `checkout.session.completed`
+5. Optionally edit JSON payload
+6. Click **Send test webhook**
+
+## Security considerations
+
+- **Signature verification**: Always verify webhook signature before processing
+- **Timing-safe comparison**: Use `timingSafeEqual` to prevent timing attacks
+- **Timestamp validation**: Reject events older than 5 minutes
+- **HTTPS only**: Never expose webhook endpoints over HTTP
+- **Secret rotation**: Rotate webhook secret if compromised
+
+## Event types
+
+Currently, the integration only processes:
+
+- `checkout.session.completed` - Customer completed checkout
+
+Other event types are acknowledged but not processed:
+
+```typescript
+if (type !== 'checkout.session.completed') {
+  return { handled: true, inserted: false };
+}
+```
+
+<Note>
+  To process additional event types (e.g., `payment_intent.succeeded`), extend the `handleStripeWebhookPayload` function in features/partners/stripe-webhook.ts:235-261.
+</Note>
+
+## Monitoring
+
+Monitor webhook health in Stripe Dashboard:
+
+1. Go to **Developers** > **Webhooks**
+2. Click on your endpoint
+3. View **Recent events** and **Response codes**
+4. Check for failed deliveries
+
+Stripe retries failed webhooks with exponential backoff for up to 3 days.

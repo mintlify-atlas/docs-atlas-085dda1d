@@ -1,0 +1,373 @@
+---
+title: Data flow and runtime behavior
+description: How event data flows from storage through processing to public delivery
+---
+
+This page documents the complete data flow for event reads in OOOC Fête Finder, from Postgres storage through processing layers to public delivery.
+
+## Runtime source order
+
+In production (`DATA_MODE=remote`), the source priority is:
+
+1. **Postgres event store** (primary)
+2. **Local CSV fallback** (`data/events.csv`) if Postgres data is unavailable
+
+<Warning>
+Google Sheets is NOT used as a live runtime source. It's only used in admin for backup preview and import operations.
+</Warning>
+
+## Data read pipeline
+
+### Step 1: Entry point
+
+All public event reads start with the runtime service:
+
+```typescript
+// features/data-management/runtime-service.ts
+import { getLiveEvents } from '@/features/data-management/runtime-service'
+
+const result = await getLiveEvents({
+  includeFeaturedProjection: true,
+  includeEngagementProjection: true
+})
+```
+
+### Step 2: Source chain
+
+The runtime service delegates to the data manager:
+
+```typescript
+// features/data-management/data-manager.ts
+export class DataManager {
+  static async getEventsData(): Promise<DataManagerResult> {
+    // Try sources in priority order based on DATA_MODE
+  }
+}
+```
+
+### Step 3: Source resolution
+
+For `DATA_MODE=remote`:
+
+```typescript
+// Source priority
+const sources: SourceDescriptor[] = [
+  loadFromStore,      // Postgres event store
+  loadFromLocalCSV    // Fallback CSV
+]
+```
+
+Each source is attempted in order until one succeeds with valid data.
+
+<Accordion title="View source descriptor interface">
+```typescript
+interface SourceDescriptor {
+  id: 'local' | 'store' | 'test'
+  load: (warnings: string[]) => Promise<SourceAttemptResult>
+}
+
+interface SourceAttemptSuccess {
+  success: true
+  events: Event[]
+  count: number
+  source: 'local' | 'store' | 'test'
+  warnings: string[]
+  lastUpdate: string
+}
+```
+</Accordion>
+
+### Step 4: CSV processing
+
+Once raw CSV data is retrieved from a source, it goes through `processCSVData()`:
+
+```typescript
+// features/data-management/data-processor.ts
+export async function processCSVData(
+  csvContent: string,
+  source: 'local' | 'remote' | 'store',
+  enableLocalFallback: boolean = true,
+  options: {
+    populateCoordinates?: boolean
+    referenceDate?: Date
+  } = {}
+): Promise<ProcessedDataResult>
+```
+
+### Step 5: Event key hydration
+
+Every event must have a stable, unique `eventKey`:
+
+```typescript
+// features/data-management/assembly/event-key.ts
+import { ensureUniqueEventKeys } from './assembly/event-key'
+
+const keyedRows = ensureUniqueEventKeys(csvRows, {
+  stableKeys: EXPECTED_HEADERS
+})
+```
+
+Key generation rules:
+- Existing valid keys are preserved
+- Missing keys are generated from normalized row content using SHA-256
+- Collisions are resolved deterministically with salt
+
+<Info>
+Event keys follow the pattern `evt_[a-z0-9]{12,20}` and are immutable after first generation.
+</Info>
+
+### Step 6: Event assembly
+
+Each CSV row is transformed into a typed `Event` object:
+
+```typescript
+// features/data-management/assembly/event-assembler.ts
+const events: Event[] = keyedRows.rows.map((row, index) =>
+  assembleEvent(row, index, {
+    dateNormalizationContext: dateContext
+  })
+)
+```
+
+Assembly handles:
+- Field normalization and transformation
+- Date parsing with context-aware inference
+- Genre and venue type categorization
+- URL validation and sanitization
+
+### Step 7: Quality checks
+
+Before returning, events undergo validation:
+
+```typescript
+// features/data-management/validation/quality-checks.ts
+export function performEventQualityChecks(events: Event[]): {
+  passed: boolean
+  errors: string[]
+}
+```
+
+Checks include:
+- Required fields present (name, date, location)
+- Valid date formats
+- Reasonable coordinate bounds
+- No duplicate event keys
+
+### Step 8: Coordinate population
+
+Coordinates are populated from durable KV storage:
+
+```typescript
+// features/maps/event-coordinate-populator.ts
+const populator = new EventCoordinatePopulator()
+await populator.populateCoordinatesForEvents(events, {
+  batchSize: 10,
+  onProgress: (processed, total, current) => {
+    log.info('maps', `Geocoded ${processed}/${total}`)
+  }
+})
+```
+
+<Note>
+Coordinate storage uses KV key pattern `maps:locations:v1:<normalized_address>`. Coordinates are prewarmed on admin writes to reduce live geocoding API calls.
+</Note>
+
+### Step 9: Projection layers
+
+Finally, runtime service applies optional projections:
+
+```typescript
+// Apply featured spotlight status
+if (includeFeaturedProjection) {
+  await applyFeaturedProjectionToEvents(events)
+}
+
+// Apply engagement counts
+if (includeEngagementProjection) {
+  const repo = await getEventEngagementRepository()
+  const stats = await repo.getCalendarSyncCountsByEventKeys(
+    events.map(e => e.eventKey)
+  )
+  
+  for (const event of events) {
+    event.calendarSyncCount = stats.get(event.eventKey) ?? 0
+  }
+}
+```
+
+## Public delivery
+
+Processed events are delivered through Next.js rendering:
+
+### ISR routes (homepage)
+
+```typescript
+// app/page.tsx
+export const revalidate = 300 // 5 minutes
+
+export default async function Home() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <HomeEventsSection />
+    </Suspense>
+  )
+}
+```
+
+### Server component data fetch
+
+```typescript
+// Inside HomeEventsSection server component
+const eventsResult = await getLiveEvents()
+
+if (!eventsResult.success) {
+  return <ErrorState />
+}
+
+return <EventGrid events={eventsResult.data} />
+```
+
+## Admin write flow
+
+When admins save or import data:
+
+### Save to Postgres
+
+```typescript
+// features/data-management/actions.ts
+export async function saveEventsToStore(
+  csvContent: string
+): Promise<SaveResult> {
+  const store = await LocalEventStore.getInstance()
+  await store.saveCsv(csvContent)
+  
+  // Warm coordinate cache
+  const events = await processCSVData(csvContent, 'store')
+  await warmupCoordinateCache(events)
+  
+  return { success: true }
+}
+```
+
+### Revalidation
+
+After successful save:
+
+```typescript
+// features/data-management/runtime-service.ts
+export async function fullRevalidation(): Promise<FullRevalidationResult> {
+  // Revalidate cache tags
+  for (const tag of EVENTS_CACHE_TAGS) {
+    revalidateTag(tag)
+  }
+  
+  // Revalidate specific paths
+  for (const path of EVENTS_LAYOUT_PATHS) {
+    revalidatePath(path)
+  }
+  
+  return {
+    success: true,
+    cacheRefreshed: true,
+    pageRevalidated: true,
+    message: 'Full revalidation completed'
+  }
+}
+```
+
+<Warning>
+Revalidation is asynchronous. Public pages may serve stale data briefly until background regeneration completes.
+</Warning>
+
+## Coordinate warm-up
+
+Admin writes trigger coordinate cache warm-up:
+
+```typescript
+// Warm-up flow
+export async function warmupCoordinateCache(events: Event[]) {
+  const populator = new EventCoordinatePopulator()
+  
+  // This writes to KV: maps:locations:v1:<address>
+  await populator.populateCoordinatesForEvents(events)
+  
+  // Auto-upgrade estimated coordinates when geocoding available
+  await populator.upgradeEstimatedCoordinates()
+  
+  // Prune stale location keys
+  await populator.pruneStaleKeys(events)
+}
+```
+
+## Featured scheduling
+
+Featured (spotlight) events are managed separately:
+
+```typescript
+// features/events/featured/service.ts
+export async function applyFeaturedProjectionToEvents(
+  events: Event[]
+): Promise<void> {
+  const repo = await getFeaturedScheduleRepository()
+  const activeEntry = await repo.getActiveEntry()
+  
+  if (!activeEntry) return
+  
+  for (const event of events) {
+    if (event.eventKey === activeEntry.eventKey) {
+      event.isFeatured = true
+    }
+  }
+}
+```
+
+<Info>
+Featured scheduling is Postgres-backed (`app_featured_event_schedule`). Legacy CSV `Featured` column values are rejected on save.
+</Info>
+
+## Data mode configuration
+
+The `DATA_MODE` environment variable controls source behavior:
+
+| Mode | Primary Source | Fallback | Use Case |
+|------|---------------|----------|----------|
+| `remote` | Postgres store | Local CSV | Production |
+| `local` | Local CSV | None | Development |
+| `test` | Test fixtures | None | Testing |
+
+<Warning>
+`DATA_MODE` is required in production deploys. The app fails fast at startup if missing.
+</Warning>
+
+## Metrics and observability
+
+Runtime service tracks basic metrics:
+
+```typescript
+// Telemetry only, not a data cache
+const metrics = {
+  errors: 0,
+  totalFetchMs: 0,
+  fetchCount: 0,
+  lastReset: Date.now()
+}
+```
+
+Metrics are available at `GET /api/admin/data-store/status`.
+
+## Related documentation
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" href="/architecture/overview" icon="sitemap">
+    System architecture and rendering contracts
+  </Card>
+  <Card title="Event identity" href="/architecture/event-identity" icon="fingerprint">
+    Stable event keys and share link model
+  </Card>
+  <Card title="Admin workflow" href="/admin/workflow" icon="user-gear">
+    Day-to-day admin operations
+  </Card>
+  <Card title="Geocoding" href="/integrations/geocoding" icon="map-location-dot">
+    Coordinate population and caching
+  </Card>
+</CardGroup>

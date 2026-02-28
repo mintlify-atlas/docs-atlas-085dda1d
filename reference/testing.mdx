@@ -1,0 +1,472 @@
+---
+title: Testing
+description: Testing strategy, patterns, and best practices for OOOC Fête Finder
+---
+
+OOOC Fête Finder uses [Vitest](https://vitest.dev) as its testing framework. Tests are organized into unit and integration categories with focused coverage on critical business logic.
+
+## Quick Start
+
+<CodeGroup>
+```bash Run all tests
+pnpm test
+```
+
+```bash Watch mode
+pnpm test:watch
+```
+
+```bash Coverage report
+pnpm test:coverage
+```
+</CodeGroup>
+
+## Test Organization
+
+All tests live in the `__tests__/` directory at the project root:
+
+```
+__tests__/
+├── unit/                    # Unit tests (isolated logic)
+│   ├── rate-limiter.test.ts
+│   ├── event-key.test.ts
+│   ├── csv-parser.test.ts
+│   └── ...
+└── integration/             # Integration tests (with dependencies)
+    ├── runtime-service.test.ts
+    ├── data-manager.test.ts
+    ├── auth-verify-route.test.ts
+    └── ...
+```
+
+### Unit Tests
+
+Test individual functions and modules in isolation:
+
+- Rate limiting logic
+- Event key generation
+- CSV parsing
+- Date normalization
+- Calendar utilities
+- Logger deduplication
+- Feature flag logic
+
+**Characteristics:**
+- Fast execution
+- No external dependencies
+- Mock all I/O (database, network, filesystem)
+- Focus on pure logic and transformations
+
+### Integration Tests
+
+Test components with real or near-real dependencies:
+
+- Runtime service data flow
+- Data manager source chain
+- API route handlers
+- Admin actions
+- Event store backup service
+- Featured event scheduling
+
+**Characteristics:**
+- May use in-memory database mocks
+- Test cross-module interactions
+- Validate complete workflows
+- Verify error handling and edge cases
+
+## Configuration
+
+Vitest configuration is in `vitest.config.ts`:
+
+```typescript vitest.config.ts
+import path from "node:path";
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    environment: "node",
+    globals: true,
+    setupFiles: ["test/setup-env.ts"],
+    include: [
+      "__tests__/unit/**/*.test.ts",
+      "__tests__/integration/**/*.test.ts"
+    ],
+    exclude: ["node_modules", ".next", "dist"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html"],
+      include: [
+        "features/data-management/**/*.ts",
+        "lib/platform/postgres/**/*.ts",
+        "features/auth/**/*.ts"
+      ]
+    }
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "."),
+      "server-only": path.resolve(__dirname, "test/mocks/server-only.ts")
+    }
+  }
+});
+```
+
+### Key Settings
+
+**Environment**: `node`  
+Tests run in Node.js environment (not browser/jsdom).
+
+**Globals**: `true`  
+Vitest globals like `describe`, `it`, `expect` are available without imports.
+
+**Setup files**: `test/setup-env.ts`  
+Runs before all tests to set default environment variables:
+
+```typescript test/setup-env.ts
+process.env.AUTH_SECRET ??= "test-auth-secret-0123456789-abcdefghijklmnopqrstuvwxyz";
+process.env.DATA_MODE ??= "remote";
+process.env.NEXT_PUBLIC_SITE_URL ??= "http://localhost:3000";
+```
+
+**Path alias**: `@`  
+Resolves to project root, matching Next.js configuration.
+
+**Mock `server-only`**  
+Replaces Next.js `server-only` module for testing.
+
+## Coverage
+
+Coverage focuses on critical business logic:
+
+<Accordion title="Covered modules">
+
+**Data management**
+- `features/data-management/**/*.ts`
+- CSV processing
+- Event validation
+- Source chain (Postgres → CSV fallback)
+- Coordinate warmup
+
+**Postgres platform**
+- `lib/platform/postgres/**/*.ts`
+- KV store repository
+- Event store repository
+- Rate limit repository
+- Engagement tracking
+
+**Authentication**
+- `features/auth/**/*.ts`
+- Token generation
+- Session management
+- Verification flow
+
+</Accordion>
+
+**Reports:**
+- **Text**: Terminal summary (lines, statements, branches, functions)
+- **HTML**: Browse detailed coverage at `coverage/index.html`
+
+<Info>
+HTML reports include line-by-line coverage visualization. Open `coverage/index.html` in a browser after running `pnpm test:coverage`.
+</Info>
+
+## Writing Tests
+
+### Unit Test Pattern
+
+Here's a typical unit test structure using mocking:
+
+```typescript __tests__/unit/rate-limiter.test.ts
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type RepositoryMock = {
+  consumeWindow: ReturnType<typeof vi.fn>;
+  cleanupExpired: ReturnType<typeof vi.fn>;
+};
+
+const loadLimiter = async (options?: { repositoryAvailable?: boolean }) => {
+  vi.resetModules();
+
+  const repository: RepositoryMock = {
+    consumeWindow: vi.fn(),
+    cleanupExpired: vi.fn(),
+  };
+
+  vi.doMock("@/lib/config/env", () => ({
+    env: { AUTH_SECRET: "test-secret-32-chars..." },
+  }));
+
+  vi.doMock("@/lib/platform/postgres/rate-limit-repository", () => ({
+    getRateLimitRepository: vi.fn(() =>
+      options?.repositoryAvailable === false ? null : repository
+    ),
+  }));
+
+  const limiter = await import("@/features/security/rate-limiter");
+  return { repository, limiter };
+};
+
+describe("rate-limiter helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns blocked decision when IP counter is over limit", async () => {
+    const { repository, limiter } = await loadLimiter();
+    repository.consumeWindow.mockResolvedValue({
+      allowed: false,
+      count: 61,
+      limit: 60,
+      resetAt: "2026-06-21T00:00:00.000Z",
+      retryAfterSeconds: 14,
+    });
+
+    const decision = await limiter.checkAuthVerifyIpLimit("203.0.113.8");
+
+    expect(decision).toMatchObject({
+      allowed: false,
+      reason: "ip_limit",
+      retryAfterSeconds: 14,
+    });
+  });
+});
+```
+
+**Key techniques:**
+1. **Module reset**: `vi.resetModules()` ensures clean state
+2. **Mock dependencies**: `vi.doMock()` replaces imports
+3. **Type-safe mocks**: Define mock types for autocomplete
+4. **Dynamic imports**: `await import()` after mocking
+5. **Clear mocks**: `vi.clearAllMocks()` in `beforeEach`
+
+### Integration Test Pattern
+
+Integration tests mock fewer dependencies:
+
+```typescript __tests__/integration/runtime-service.test.ts
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const loadRuntimeService = async () => {
+  vi.resetModules();
+
+  const dataManagerGetEventsData = vi.fn();
+  const applyFeaturedProjectionToEvents = vi.fn((events) =>
+    Promise.resolve(events)
+  );
+
+  vi.doMock("@/features/data-management/data-manager", () => ({
+    DataManager: { getEventsData: dataManagerGetEventsData },
+  }));
+
+  vi.doMock("@/features/events/featured/service", () => ({
+    applyFeaturedProjectionToEvents,
+  }));
+
+  const service = await import("@/features/data-management/runtime-service");
+  return { getLiveEvents: service.getLiveEvents, dataManagerGetEventsData };
+};
+
+describe("runtime-service", () => {
+  it("reads directly from DataManager on each call", async () => {
+    const { getLiveEvents, dataManagerGetEventsData } =
+      await loadRuntimeService();
+    dataManagerGetEventsData.mockResolvedValue({
+      success: true,
+      data: [{ id: "evt_1" }],
+      count: 1,
+      source: "store",
+    });
+
+    await getLiveEvents();
+    await getLiveEvents();
+
+    expect(dataManagerGetEventsData).toHaveBeenCalledTimes(2);
+  });
+});
+```
+
+**Differences from unit tests:**
+- Mock only external boundaries (database, API clients)
+- Allow real interactions between internal modules
+- Test complete user-facing flows
+- Verify error propagation
+
+## Test Utilities
+
+### Mock Factories
+
+Create reusable mock data generators:
+
+```typescript
+const makeEvent = (id: string) => ({
+  id: `evt_${id}`,
+  title: `Event ${id}`,
+  date: "2026-06-21",
+  location: "Paris",
+  // ... other required fields
+});
+
+const makeUser = (email: string) => ({
+  email,
+  verifiedAt: new Date().toISOString(),
+  preferences: {},
+});
+```
+
+### Async Assertions
+
+Vitest supports async matchers:
+
+```typescript
+await expect(fetchData()).resolves.toMatchObject({ success: true });
+await expect(invalidCall()).rejects.toThrow("Invalid input");
+```
+
+### Snapshot Testing
+
+<Warning>
+Snapshot tests are not currently used in this project. Prefer explicit assertions for better test clarity.
+</Warning>
+
+## Continuous Integration
+
+In CI environments, tests run automatically:
+
+```bash
+# Runs in CI
+pnpm test
+```
+
+**CI best practices:**
+- Set `CI=true` environment variable
+- Run coverage checks
+- Fail on any test failures
+- Cache `node_modules/` for faster runs
+
+## Common Patterns
+
+### Testing Error Handling
+
+```typescript
+it("returns failed result when source read fails", async () => {
+  const { getLiveEvents, dataManagerGetEventsData } =
+    await loadRuntimeService();
+  dataManagerGetEventsData.mockRejectedValue(new Error("store unavailable"));
+
+  const result = await getLiveEvents();
+
+  expect(result.success).toBe(false);
+  expect(result.error).toContain("store unavailable");
+});
+```
+
+### Testing Feature Flags
+
+```typescript
+it("skips feature when flag is disabled", () => {
+  const result = processWithFlag({ featureEnabled: false });
+  expect(result.featureApplied).toBe(false);
+});
+```
+
+### Testing Time-Dependent Logic
+
+```typescript
+it("returns correct scheduling windows", () => {
+  const now = new Date("2026-06-21T12:00:00Z");
+  vi.setSystemTime(now);
+
+  const windows = calculateWindows();
+
+  expect(windows[0].start).toBe("2026-06-21T12:00:00.000Z");
+  vi.useRealTimers();
+});
+```
+
+## Debugging Tests
+
+### Run specific test file
+
+```bash
+pnpm test __tests__/unit/rate-limiter.test.ts
+```
+
+### Run specific test case
+
+```bash
+pnpm test -t "returns blocked decision"
+```
+
+### Enable verbose output
+
+```bash
+pnpm test --reporter=verbose
+```
+
+### Debug in VS Code
+
+Add to `.vscode/launch.json`:
+
+```json
+{
+  "type": "node",
+  "request": "launch",
+  "name": "Debug Vitest",
+  "runtimeExecutable": "pnpm",
+  "runtimeArgs": ["test", "--run", "--no-coverage"],
+  "console": "integratedTerminal",
+  "internalConsoleOptions": "neverOpen"
+}
+```
+
+## Best Practices
+
+<Accordion title="Testing guidelines">
+
+**1. Test behavior, not implementation**
+
+Focus on what the code does, not how it does it.
+
+```typescript
+// Good
+expect(result.allowed).toBe(false);
+
+// Avoid
+expect(internalCounter).toBe(61);
+```
+
+**2. Use descriptive test names**
+
+```typescript
+// Good
+it("returns blocked decision when IP counter is over limit", ...);
+
+// Avoid
+it("works", ...);
+```
+
+**3. One assertion per test (when possible)**
+
+Makes failures easier to diagnose.
+
+**4. Avoid test interdependence**
+
+Each test should run independently. Use `beforeEach` for setup.
+
+**5. Mock at boundaries**
+
+Mock external services (database, API), but let internal modules interact naturally.
+
+**6. Test error paths**
+
+Don't just test happy paths. Verify error handling and edge cases.
+
+**7. Keep tests fast**
+
+Unit tests should run in milliseconds. If slow, consider mocking more aggressively.
+
+</Accordion>
+
+## Troubleshooting
+
+See [Troubleshooting](/reference/troubleshooting#testing-issues) for common testing issues and solutions.

@@ -1,0 +1,392 @@
+---
+title: Caching and revalidation policy
+description: ISR, revalidation, and cache behavior for OOOC Fête Finder
+---
+
+OOOC Fête Finder uses Next.js built-in caching mechanisms (ISR, `unstable_cache`, and on-demand revalidation) to balance performance with data freshness. There is **no custom in-memory event cache layer**.
+
+## What "stale" means
+
+In this application, "stale" means the user is seeing a cached HTML or React Server Component (RSC) payload that does not reflect the latest backend state.
+
+When a route has `revalidate: N`:
+
+1. **Cached output is reused** for up to `N` seconds
+2. **After that window:** The next request may still receive the previous cached payload while Next.js regenerates in the background
+3. **Once regeneration succeeds:** Later requests receive the new payload
+4. **If regeneration fails:** The previous cached payload continues to be served until a later successful regeneration
+
+<Info>
+  If regenerated output is unchanged, users receive the same page content as before. Revalidation performs server work but does not imply a full "new site download" for end users.
+</Info>
+
+## Route-level caching behavior
+
+### Homepage (`/`)
+
+**Strategy:** ISR with time-based revalidation
+
+**Revalidate:** 300 seconds (5 minutes)
+
+**Location:** `app/page.tsx:7`
+
+```tsx
+export const revalidate = 300; // 5 minutes in seconds
+```
+
+**Behavior:**
+- First request generates static HTML
+- Subsequent requests within 5 minutes serve cached HTML
+- After 5 minutes, next request triggers background regeneration
+- New cache is served to following requests
+
+**Why 5 minutes:**
+Balances data freshness with server load. Event data changes are typically admin-driven and do not require instant propagation.
+
+### Feature event page (`/feature-event`)
+
+**Strategy:** Static-first with cached server reads
+
+**Revalidate:** 60 seconds (1 minute) for featured projection lookups
+
+**Location:** `app/feature-event/page.tsx:160`
+
+```tsx
+const getFeaturedProjectionCached = cache(
+  async () => getFeaturedProjection().catch(() => null),
+  ["feature-event-projection"],
+  { revalidate: 60 },
+);
+```
+
+**Behavior:**
+- Page shell is static
+- Featured event status uses `unstable_cache` with 60-second TTL
+- Spotlight availability badge refreshes every minute
+
+**Why 1 minute:**
+Spotlight slot availability is time-sensitive for partner decisions. Shorter revalidation ensures accurate slot counts.
+
+### Submit event page (`/submit-event`)
+
+**Strategy:** Static-first with Suspense boundaries
+
+**Revalidate:** Not explicitly set (inherits default behavior)
+
+**Behavior:**
+- Page is statically generated at build time
+- Submission form state is client-side
+- No server-side dynamic data dependencies
+
+### Partner success page (`/partner-success`)
+
+**Strategy:** Static generation
+
+**Revalidate:** Not explicitly set (static confirmation page)
+
+**Behavior:**
+- Fully static page
+- No dynamic server data
+- Cached indefinitely until next deployment
+
+### Privacy policy (`/privacy`)
+
+**Strategy:** Force static
+
+**Export config:** `export const dynamic = "force-static"`
+
+**Location:** `app/privacy/page.tsx:7`
+
+**Behavior:**
+- Generated once at build time
+- Never revalidated (static legal content)
+- No server-side rendering
+
+### Event detail modal route (`/event/[eventKey]/[[...slug]]`)
+
+**Strategy:** Dynamic route render
+
+**Behavior:**
+- Not statically generated (dynamic `eventKey` parameter)
+- Renders on-demand per request
+- Used for share links that redirect to homepage modal state
+
+<Note>
+  This route redirects to `/?event=<eventKey>&slug=<slug>` to open the modal on the homepage.
+</Note>
+
+### Partner stats page (`/partner-stats/[activationId]`)
+
+**Strategy:** Force dynamic
+
+**Export config:** `export const dynamic = "force-dynamic"`
+
+**Behavior:**
+- Always renders at request time
+- No caching (stats are request-specific)
+- Token-protected private reporting
+
+### Admin routes (`/admin/*`)
+
+**Strategy:** Force dynamic with `noStore()`
+
+**Export config:** `export const dynamic = "force-dynamic"`
+
+**Behavior:**
+- Always renders at request time
+- Explicit cache bypass with `noStore()`
+- Admin auth required on every request
+- Real-time data reads (no ISR)
+
+<Warning>
+  Admin routes are **never cached**. All data is fetched fresh on every request to ensure admins see the latest state.
+</Warning>
+
+## Shared cached data
+
+### Sliding banner settings
+
+**Strategy:** `unstable_cache` with tag and path invalidation
+
+**Revalidate:** 300 seconds (5 minutes)
+
+**Location:** `features/site-settings/cache.ts:7`
+
+```tsx
+export const SLIDING_BANNER_REVALIDATE_SECONDS = 300;
+```
+
+**Cache key:** `"public-sliding-banner-settings"`
+
+**Cache tag:** `"sliding-banner"`
+
+**Invalidation paths:** `/` (layout), `/feature-event` (layout)
+
+**Behavior:**
+- Banner settings cached for 5 minutes
+- Admin banner updates trigger `revalidatePath()` for `/` and `/feature-event` layouts
+- Tag-based invalidation ensures consistency across pages
+
+### OG image generation (`/api/og`)
+
+**Strategy:** Edge runtime with public CDN caching
+
+**Cache-Control:** `public, s-maxage=86400, stale-while-revalidate=604800`
+
+**Location:** `app/api/og/route.tsx:12`
+
+**Behavior:**
+- OG images cached at CDN edge for 24 hours (`s-maxage=86400`)
+- Stale images served for 7 days while revalidating (`stale-while-revalidate=604800`)
+- Reduces server load for social media scrapers
+
+## Event data flow (no custom cache)
+
+OOOC Fête Finder **does not use a custom in-memory event cache layer**. All event reads are pass-through source reads with Next.js built-in caching.
+
+**Server-side event read flow:**
+
+1. Route component or API calls `getLiveEvents()` from `features/data-management/runtime-service.ts`
+2. `getLiveEvents()` calls `DataManager.getEventsData()`
+3. `DataManager` runs source chain based on `DATA_MODE`:
+   - **Remote mode:** Try Postgres store → fallback to local CSV
+   - **Local mode:** Read `data/events.csv`
+   - **Test mode:** Return in-memory `EVENTS_DATA`
+4. `processCSVData()` hydrates event keys and validates data
+5. Coordinate population uses durable KV cache (`maps:locations:v1`) when geocoding is enabled
+6. Events returned to route component
+7. **Next.js handles caching** via ISR/`unstable_cache` based on route configuration
+
+<Info>
+  There is **no event-level memory cache**. The "cache" references in `lib/cache/*` have been removed. What remains:
+  
+  - Logger dedupe map (`logger.ts:20`) - log suppression only
+  - Runtime metrics counters (`runtime-service.ts:74`) - telemetry only
+</Info>
+
+## Coordinate caching
+
+Event coordinates are cached separately from event data to reduce geocoding API calls.
+
+**Cache layer:** KV store (`app_kv_store` table in Postgres or file/memory fallback)
+
+**Cache key:** `maps:locations:v1`
+
+**Prewarming:** Admin writes (save/import/sheet save + revalidate) trigger coordinate warm-up
+
+**Behavior:**
+- Coordinates fetched from KV cache on event data reads
+- Missing coordinates trigger geocoding API call (if `GOOGLE_MAPS_API_KEY` is set)
+- Estimated coordinates auto-upgrade to precise coordinates when geocoding is available
+- Stale coordinate keys pruned during warm-up
+
+<Note>
+  Coordinate caching is **separate** from event data caching. It is a durable KV layer that persists across deployments.
+</Note>
+
+## On-demand revalidation
+
+OOOC Fête Finder uses on-demand revalidation to immediately update cached pages after admin changes.
+
+### Post-deploy revalidation
+
+**Endpoint:** `POST /api/revalidate/deploy`
+
+**Protection:** `Authorization: Bearer <DEPLOY_REVALIDATE_SECRET>`
+
+**Behavior:**
+- Forces live events reload from data source
+- Revalidates homepage (`/`) to clear ISR cache
+- Ensures preview/production deployments show current data immediately
+
+**Usage:**
+```bash
+curl -X POST "https://your-domain.com/api/revalidate/deploy" \
+  -H "Authorization: Bearer $DEPLOY_REVALIDATE_SECRET"
+```
+
+<Info>
+  This endpoint is typically called by CI/CD pipelines or deployment hooks to ensure fresh data on first load after deployment.
+</Info>
+
+### Admin-triggered revalidation
+
+Admin actions that modify event data trigger on-demand revalidation:
+
+**Actions:**
+- Save event sheet in `/admin/content`
+- Import events from Google Sheets or CSV
+- Update sliding banner settings
+- Publish or unpublish featured events
+
+**Invalidation targets:**
+- Path: `/` (homepage)
+- Path: `/feature-event` (layout)
+- Tag: `"sliding-banner"`
+
+**Implementation:**
+```tsx
+revalidatePath("/", "layout");
+revalidatePath("/feature-event", "layout");
+revalidateTag("sliding-banner", "max");
+```
+
+## Cache warming strategy
+
+OOOC Fête Finder prewarns coordinate cache on admin writes to reduce geocoding churn during live reads.
+
+**Trigger points:**
+- Admin saves event sheet
+- Admin imports events from Google Sheets
+- Admin imports events from CSV
+- Post-deploy revalidation
+
+**Warm-up process:**
+1. Extract all unique addresses from event data
+2. Check KV cache for existing coordinates
+3. Geocode missing addresses (if `GOOGLE_MAPS_API_KEY` is set)
+4. Store new coordinates in KV cache
+5. Upgrade estimated coordinates to precise coordinates
+6. Prune stale coordinate keys (addresses no longer in event data)
+
+<Info>
+  Coordinate warm-up is **synchronous** during admin writes to ensure coordinates are ready before the next live read.
+</Info>
+
+## Cache invalidation summary
+
+| Action | Invalidation target | Method |
+|--------|---------------------|--------|
+| Admin saves event sheet | `/` (homepage) | `revalidatePath()` |
+| Admin imports events | `/` (homepage) | `revalidatePath()` |
+| Admin updates banner | `/`, `/feature-event` layouts | `revalidatePath()` |
+| Admin updates banner | `sliding-banner` tag | `revalidateTag()` |
+| Post-deploy hook | `/` (homepage) | `revalidatePath()` |
+| Featured event change | `/feature-event` | `revalidatePath()` |
+
+## Stale-while-revalidate behavior
+
+Next.js ISR uses a "stale-while-revalidate" strategy:
+
+1. **Fresh period (0 to N seconds):** Serve cached response immediately
+2. **Stale period (after N seconds):**
+   - First request: Serve stale cache + trigger background regeneration
+   - Following requests: Continue serving stale cache until regeneration completes
+3. **Regeneration complete:** All new requests receive fresh cache
+
+<Note>
+  Users may see stale data for up to `revalidate` seconds + regeneration time. For most routes, this is acceptable trade-off for performance.
+</Note>
+
+## Cache debugging
+
+### Check current cache status
+
+**Admin panel:** `/admin/operations` → Data Store Status
+
+**Displays:**
+- Active data mode (`remote`, `local`, `test`)
+- Current data source (`store`, `local`, `test`)
+- Last successful data read timestamp
+- Event count from current source
+
+### Force cache refresh
+
+**Method 1: Admin revalidation**
+1. Navigate to `/admin/operations`
+2. Click "Revalidate Site Cache"
+3. Confirm action
+
+**Method 2: Deploy revalidation endpoint**
+```bash
+curl -X POST "https://your-domain.com/api/revalidate/deploy" \
+  -H "Authorization: Bearer $DEPLOY_REVALIDATE_SECRET"
+```
+
+**Method 3: Hard refresh in browser**
+- **Chrome/Edge:** Ctrl+Shift+R (Windows) or Cmd+Shift+R (Mac)
+- **Firefox:** Ctrl+F5 (Windows) or Cmd+Shift+R (Mac)
+
+<Warning>
+  Hard refresh only clears **client-side** cache. It does not invalidate server-side ISR cache.
+</Warning>
+
+## Performance considerations
+
+### Why ISR instead of SSR
+
+ISR (Incremental Static Regeneration) is preferred over SSR (Server-Side Rendering) for most routes:
+
+**Benefits:**
+- Faster response times (serve from cache)
+- Lower server load (fewer database queries)
+- Better scalability (CDN-friendly)
+- Resilience to database outages (serve stale cache)
+
+**Trade-offs:**
+- Data may be stale for up to `revalidate` seconds
+- Background regeneration adds server work
+
+**When SSR is used:**
+- Admin routes (require real-time data)
+- Partner stats (token-protected, request-specific)
+- Event detail modal route (dynamic `eventKey` parameter)
+
+### Why 5-minute revalidation for homepage
+
+The homepage uses a 5-minute revalidation window because:
+
+1. **Event data changes are admin-driven** (not user-driven)
+2. **Admins trigger explicit revalidation** after content changes
+3. **Lower server load** (fewer regenerations)
+4. **Better performance** (more cache hits)
+5. **Acceptable staleness** for event discovery use case
+
+<Info>
+  If you need instant updates after admin changes, use the on-demand revalidation endpoint instead of reducing the revalidation window.
+</Info>
+
+## Related configuration
+
+- [Data modes](/reference/data-modes) - Runtime data source behavior
+- [Environment variables](/reference/environment-variables) - Cache-related environment variables

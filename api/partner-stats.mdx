@@ -1,0 +1,305 @@
+---
+title: Partner stats endpoint
+description: Tokenized access to partner event performance metrics
+---
+
+The partner stats endpoint provides secure, tokenized access to event performance analytics for partner activations. This allows event hosts and partners to view their event's engagement metrics.
+
+## GET /api/partner-stats/[activationId]
+
+Retrieves performance statistics for a specific partner activation using a secure access token.
+
+### Path parameters
+
+<ParamField path="activationId" type="string" required>
+  Unique partner activation identifier
+</ParamField>
+
+### Query parameters
+
+<ParamField query="token" type="string" required>
+  Secure access token for the activation
+  
+  Tokens are generated when a partner activation is created and provide read-only access to stats.
+</ParamField>
+
+<ParamField query="format" type="string">
+  Response format: omit for JSON, or set to `csv` for CSV export
+</ParamField>
+
+### Response (JSON format)
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Partner statistics data (returned on success)
+  
+  <Expandable title="data properties">
+    <ResponseField name="activationId" type="string">
+      Partner activation identifier
+    </ResponseField>
+    
+    <ResponseField name="eventKey" type="string">
+      Associated event identifier
+    </ResponseField>
+    
+    <ResponseField name="eventName" type="string">
+      Event name
+    </ResponseField>
+    
+    <ResponseField name="tier" type="string">
+      Partner tier level
+    </ResponseField>
+    
+    <ResponseField name="range" type="object">
+      Date range for the statistics
+      
+      <ResponseField name="startAt" type="string">
+        ISO 8601 start timestamp
+      </ResponseField>
+      
+      <ResponseField name="endAt" type="string">
+        ISO 8601 end timestamp
+      </ResponseField>
+    </ResponseField>
+    
+    <ResponseField name="metrics" type="object">
+      Performance metrics
+      
+      <ResponseField name="clickCount" type="number">
+        Total event detail views
+      </ResponseField>
+      
+      <ResponseField name="outboundClickCount" type="number">
+        Total clicks to external event links
+      </ResponseField>
+      
+      <ResponseField name="calendarSyncCount" type="number">
+        Total calendar additions
+      </ResponseField>
+      
+      <ResponseField name="uniqueSessionCount" type="number">
+        Unique visitor sessions (all actions)
+      </ResponseField>
+      
+      <ResponseField name="uniqueViewSessionCount" type="number">
+        Unique visitor sessions that viewed the event
+      </ResponseField>
+      
+      <ResponseField name="uniqueOutboundSessionCount" type="number">
+        Unique visitor sessions that clicked outbound links
+      </ResponseField>
+      
+      <ResponseField name="uniqueCalendarSessionCount" type="number">
+        Unique visitor sessions that synced to calendar
+      </ResponseField>
+      
+      <ResponseField name="outboundSessionRate" type="number">
+        Percentage of viewing sessions that clicked outbound (0-100)
+      </ResponseField>
+      
+      <ResponseField name="calendarSessionRate" type="number">
+        Percentage of viewing sessions that synced to calendar (0-100)
+      </ResponseField>
+      
+      <ResponseField name="outboundInteractionRate" type="number">
+        Percentage of total sessions that clicked outbound (0-100)
+      </ResponseField>
+      
+      <ResponseField name="calendarInteractionRate" type="number">
+        Percentage of total sessions that synced to calendar (0-100)
+      </ResponseField>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message (returned on failure)
+</ResponseField>
+
+### Response (CSV format)
+
+When `format=csv`, returns a CSV file with the following headers:
+
+```
+activation_id,event_key,event_name,tier,start_at,end_at,views,outbound_clicks,calendar_syncs,unique_sessions,unique_view_sessions,unique_outbound_sessions,unique_calendar_sessions,outbound_session_rate,calendar_session_rate,outbound_interaction_rate,calendar_interaction_rate
+```
+
+The response includes:
+- `Content-Type: text/csv; charset=utf-8`
+- `Content-Disposition: attachment; filename="oooc-partner-stats-{eventKey}.csv"`
+
+### Error codes
+
+- `400 Bad Request`: Missing token parameter
+- `403 Forbidden`: Invalid or expired token
+- `404 Not Found`: Activation ID not found
+- `409 Conflict`: Activation exists but is in an invalid state
+
+### Security
+
+<Warning>
+Tokens provide read-only access to partner statistics. They should be treated as sensitive credentials:
+
+- Tokens are generated per-activation and cannot be regenerated
+- Each token grants access only to its associated activation's stats
+- Tokens do not expire but can be invalidated if the activation is deleted
+- Share tokens only with authorized partners or event hosts
+</Warning>
+
+### Examples
+
+<CodeGroup>
+
+```javascript JSON format
+const activationId = 'act_abc123xyz';
+const token = 'tok_secure_token_here';
+
+const response = await fetch(
+  `/api/partner-stats/${activationId}?token=${token}`
+);
+
+const result = await response.json();
+// {
+//   "success": true,
+//   "data": {
+//     "activationId": "act_abc123xyz",
+//     "eventKey": "jazz-sunset-2026-03-15",
+//     "eventName": "Jazz Night at Le Sunset",
+//     "tier": "premium",
+//     "range": {
+//       "startAt": "2026-03-01T00:00:00.000Z",
+//       "endAt": "2026-03-31T23:59:59.999Z"
+//     },
+//     "metrics": {
+//       "clickCount": 1250,
+//       "outboundClickCount": 342,
+//       "calendarSyncCount": 158,
+//       "uniqueSessionCount": 892,
+//       "uniqueViewSessionCount": 867,
+//       "uniqueOutboundSessionCount": 298,
+//       "uniqueCalendarSessionCount": 142,
+//       "outboundSessionRate": 34.4,
+//       "calendarSessionRate": 16.4,
+//       "outboundInteractionRate": 33.4,
+//       "calendarInteractionRate": 15.9
+//     }
+//   }
+// }
+```
+
+```javascript CSV format
+const activationId = 'act_abc123xyz';
+const token = 'tok_secure_token_here';
+
+const response = await fetch(
+  `/api/partner-stats/${activationId}?token=${token}&format=csv`
+);
+
+const csv = await response.text();
+// Downloads file: oooc-partner-stats-jazz-sunset-2026-03-15.csv
+//
+// activation_id,event_key,event_name,tier,start_at,end_at,views,...
+// act_abc123xyz,jazz-sunset-2026-03-15,"Jazz Night at Le Sunset",premium,...
+```
+
+```javascript Invalid token
+const response = await fetch(
+  '/api/partner-stats/act_abc123xyz?token=invalid'
+);
+
+// Status: 403
+// {
+//   "success": false,
+//   "error": "Invalid or expired token"
+// }
+```
+
+```javascript Missing token
+const response = await fetch('/api/partner-stats/act_abc123xyz');
+
+// Status: 400
+// {
+//   "success": false,
+//   "error": "Token required"
+// }
+```
+
+</CodeGroup>
+
+---
+
+## Use cases
+
+<Expandable title="Partner dashboards">
+Integrate the partner stats endpoint into custom dashboards:
+
+```javascript
+// Fetch and display stats in a partner portal
+async function loadPartnerStats(activationId, token) {
+  const response = await fetch(
+    `/api/partner-stats/${activationId}?token=${token}`
+  );
+  
+  if (!response.ok) {
+    throw new Error('Failed to load stats');
+  }
+  
+  const { data } = await response.json();
+  return data.metrics;
+}
+
+const metrics = await loadPartnerStats('act_xyz', 'tok_secret');
+console.log(`Total views: ${metrics.clickCount}`);
+console.log(`Conversion rate: ${metrics.outboundSessionRate}%`);
+```
+</Expandable>
+
+<Expandable title="Automated reporting">
+Download CSV exports for regular reporting:
+
+```javascript
+// Download stats as CSV for email reporting
+async function exportStatsCSV(activationId, token) {
+  const response = await fetch(
+    `/api/partner-stats/${activationId}?token=${token}&format=csv`
+  );
+  
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `partner-stats-${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+}
+
+exportStatsCSV('act_xyz', 'tok_secret');
+```
+</Expandable>
+
+<Expandable title="Email notifications">
+Send periodic stats updates to partners:
+
+```javascript
+// Server-side: Fetch and email stats weekly
+async function sendWeeklyReport(activationId, token, recipientEmail) {
+  const response = await fetch(
+    `https://fete-finder.example.com/api/partner-stats/${activationId}?token=${token}`
+  );
+  
+  const { data } = await response.json();
+  
+  await sendEmail(recipientEmail, {
+    subject: `Weekly Stats: ${data.eventName}`,
+    body: `
+      Your event received:
+      - ${data.metrics.clickCount} total views
+      - ${data.metrics.outboundClickCount} link clicks
+      - ${data.metrics.calendarSyncCount} calendar adds
+    `
+  });
+}
+```
+</Expandable>

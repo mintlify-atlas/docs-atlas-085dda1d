@@ -1,0 +1,489 @@
+---
+title: Logging and observability
+description: Structured logging, monitoring, and troubleshooting for OOOC Fête Finder
+---
+
+## Overview
+
+OOOC Fête Finder uses structured logging for observability in development and production. Logs are human-readable in development and JSON-formatted in production for log aggregation services.
+
+## Logger model
+
+The application uses a centralized logger:
+
+```typescript
+// lib/platform/logger.ts
+import { log } from "@/lib/platform/logger";
+
+log.info("scope", "message", { context });
+log.warn("scope", "message", { context });
+log.error("scope", "message", { context }, error);
+```
+
+### Development format
+
+Human-readable logs with emoji indicators:
+
+```
+· [cache] Events loaded {"source":"store","count":123}
+⚠ [geocoding] Using arrondissement fallback (API unavailable)
+✗ [database] Connection failed {"attempt":3}
+  → connect ECONNREFUSED 127.0.0.1:5432
+```
+
+### Production format
+
+Structured JSON logs (one per line):
+
+```json
+{"level":"info","scope":"cache","message":"Events loaded","context":{"source":"store","count":123},"ts":"2026-02-28T10:30:00.000Z"}
+{"level":"warn","scope":"geocoding","message":"Using arrondissement fallback (API unavailable)","ts":"2026-02-28T10:30:05.000Z"}
+{"level":"error","scope":"database","message":"Connection failed","context":{"attempt":3},"error":{"message":"connect ECONNREFUSED","stack":"..."},"ts":"2026-02-28T10:30:10.000Z"}
+```
+
+## What is logged
+
+The application logs the following events:
+
+### Startup and runtime mode
+
+```typescript
+log.info("startup", "Data mode configured", { mode: "remote" });
+log.info("startup", "Database pool initialized", { maxConnections: 3 });
+log.info("startup", "Geocoding API available", { provider: "google-maps" });
+```
+
+### Runtime read operations
+
+```typescript
+log.info("cache", "Events loaded from store", {
+  source: "postgres-store",
+  count: 123,
+  cached: false
+});
+
+log.warn("cache", "Store read failed, using fallback", {
+  source: "local-csv",
+  error: "Connection timeout"
+});
+```
+
+### Revalidation operations
+
+```typescript
+log.info("cache", "Homepage revalidated", {
+  trigger: "admin-save",
+  eventCount: 125
+});
+
+log.error("cache", "Revalidation failed", undefined, error);
+```
+
+### Geocoding operations
+
+```typescript
+log.warn("geocoding", "API key not configured, using fallback");
+
+log.info("geocoding", "Batch geocoding completed", {
+  total: 150,
+  cached: 140,
+  fetched: 10,
+  failed: 0
+});
+```
+
+### Authentication and rate limiting
+
+```typescript
+log.warn("auth", "Rate limiter unavailable, proceeding without limit check");
+
+log.info("auth", "Admin session created", { sessionId: "abc123" });
+
+log.warn("auth", "Rate limit exceeded", {
+  ip: "192.0.2.1",
+  endpoint: "/api/track"
+});
+```
+
+### Database operations
+
+```typescript
+log.info("database", "Event store updated", {
+  rowCount: 125,
+  updatedBy: "admin",
+  origin: "manual"
+});
+
+log.error("database", "Transaction failed", { operation: "save-events" }, error);
+```
+
+## Noise controls
+
+To reduce log spam, the logger implements deduplication:
+
+### Development info deduplication
+
+```typescript
+// Development only: dedupe identical info logs within 1.2s window
+const DEV_INFO_DEDUPE_WINDOW_MS = 1200;
+
+if (IS_DEV && level === "info" && shouldSkipDevInfoLog(scope, message, context)) {
+  return; // Skip duplicate log
+}
+```
+
+<Info>
+  `warn` and `error` logs are **never** deduplicated. Only `info` logs in development are deduplicated.
+</Info>
+
+### Intentionally removed logs
+
+The following logs were removed to reduce noise:
+
+- **Per-address geocoding failures**: Batch summary only
+- **Repetitive coordinate-skip logs**: Aggregated warnings
+- **Periodic memory dump spam**: Removed entirely
+- **Duplicate startup messages**: Deduplicated
+
+<Note>
+  Deduplication affects logs only, not runtime behavior. All geocoding attempts still occur even if individual failures aren't logged.
+</Note>
+
+## Log levels
+
+### Info
+
+Normal operations and successful actions:
+
+```typescript
+log.info("cache", "Events loaded", { source: "store", count: 123 });
+log.info("backup", "Snapshot created", { id: "snap_abc", rowCount: 125 });
+log.info("admin", "Event sheet saved", { updatedBy: "admin" });
+```
+
+### Warning
+
+Non-critical issues that don't prevent operation:
+
+```typescript
+log.warn("geocoding", "Using fallback coordinates");
+log.warn("auth", "Rate limiter unavailable");
+log.warn("cache", "Stale data served, refresh failed");
+```
+
+### Error
+
+Critical failures requiring attention:
+
+```typescript
+log.error("database", "Connection failed", undefined, error);
+log.error("backup", "Snapshot creation failed", { trigger: "cron" }, error);
+log.error("admin", "Event validation failed", { rowCount: 5 }, error);
+```
+
+## Accessing logs
+
+### Vercel function logs
+
+View real-time logs in Vercel dashboard:
+
+<Steps>
+  <Step title="Navigate to deployment">
+    Vercel Dashboard > Deployments > Select deployment
+  </Step>
+  
+  <Step title="Open logs tab">
+    Click "Logs" tab to view function invocation logs
+  </Step>
+  
+  <Step title="Filter by log level">
+    Use search to filter:
+    - `"level":"error"` for errors only
+    - `"scope":"database"` for database logs
+    - `"scope":"cache"` for cache operations
+  </Step>
+</Steps>
+
+### Local development logs
+
+View logs in terminal where `pnpm dev` is running:
+
+```bash
+pnpm dev
+
+# Output:
+· [cache] Events loaded {"source":"local-csv","count":123}
+· [geocoding] Using fallback coordinates
+⚠ [auth] ADMIN_KEY not set, admin routes disabled
+```
+
+### Health check script
+
+Run diagnostics with detailed logging:
+
+```bash
+DATABASE_URL="your-url" \
+ADMIN_KEY="your-key" \
+BASE_URL="https://your-domain.com" \
+pnpm health:check
+```
+
+Outputs:
+```
+=== Postgres Connectivity ===
+Postgres connection: OK
+
+=== KV Store Keys ===
+- users:collection:v1 (updated 2026-02-28T10:30:00.000Z)
+Key count: 1
+
+=== Events CSV Row Counts ===
+meta.rowCount: 123
+raw CSV rows (excluding header): 123
+metadata updatedAt: 2026-02-28T10:30:00.000Z
+
+=== Event Tables Row Counts ===
+rows table count: 123
+columns table count: 17
+meta row_count: 123
+meta matches rows: yes
+```
+
+## Troubleshooting pattern
+
+When issues occur, follow this diagnostic flow:
+
+<Steps>
+  <Step title="Check environment variables">
+    Verify required variables are set:
+    ```bash
+    # Essential variables
+    DATABASE_URL=postgresql://...
+    AUTH_SECRET=your-secret-here
+    DATA_MODE=remote
+    ADMIN_KEY=your-admin-key
+    ```
+    
+    See [Environment Variables](/reference/environment-variables) for complete list.
+  </Step>
+  
+  <Step title="Check data manager source">
+    From `/admin/operations`, review "Live Runtime Snapshot":
+    - Data source (should be `postgres-store`)
+    - Event count
+    - Last updated timestamp
+    - Any error messages
+  </Step>
+  
+  <Step title="Validate database health">
+    Call the health endpoint:
+    ```bash
+    curl https://your-domain.com/api/admin/health \
+      -H "x-admin-key: your-admin-key"
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "status": "healthy",
+      "database": "connected",
+      "dataMode": "remote",
+      "eventCount": 123
+    }
+    ```
+  </Step>
+  
+  <Step title="Re-run publish flow">
+    From `/admin/operations`:
+    1. Click "Backup Now" (safety snapshot)
+    2. Navigate to `/admin/content`
+    3. Open "Event Sheet Editor"
+    4. Return to `/admin/operations`
+    5. Click "Save and Revalidate Homepage"
+    6. Verify "Live Runtime Snapshot" updates
+    
+    See [Admin Workflow](/operations/admin-workflow) for details.
+  </Step>
+</Steps>
+
+## Common log patterns
+
+### Successful event load
+
+```
+· [cache] Events loaded {"source":"postgres-store","count":123,"cached":false}
+```
+
+Meaning: Fresh data loaded from PostgreSQL successfully.
+
+### Database fallback
+
+```
+⚠ [cache] Store read failed, using fallback {"source":"local-csv","error":"Connection timeout"}
+```
+
+Meaning: PostgreSQL unavailable, falling back to local CSV. Check `DATABASE_URL`.
+
+### Geocoding API unavailable
+
+```
+⚠ [geocoding] Using arrondissement fallback (API unavailable)
+```
+
+Meaning: `GOOGLE_MAPS_API_KEY` not set or quota exceeded. Using district center coordinates.
+
+### Rate limiter unavailable
+
+```
+⚠ [auth] Rate limiter unavailable, proceeding without limit check
+```
+
+Meaning: Redis/KV store unavailable for rate limiting. Requests proceed without rate limiting.
+
+### Cron job execution
+
+```
+· [backup] Snapshot created {"id":"backup_20260228","rowCount":123,"prunedCount":5}
+```
+
+Meaning: Daily backup cron ran successfully, created snapshot, pruned 5 old backups.
+
+## Log aggregation
+
+For production monitoring, integrate with log aggregation services:
+
+### Vercel Log Drains
+
+Configure in Vercel dashboard:
+
+<Steps>
+  <Step title="Choose log drain service">
+    Options:
+    - Datadog
+    - LogDNA
+    - Logtail
+    - Axiom
+    - Custom HTTPS endpoint
+  </Step>
+  
+  <Step title="Configure drain">
+    Project Settings > Log Drains > Add Log Drain
+  </Step>
+  
+  <Step title="Query structured logs">
+    Use service's query language to filter logs:
+    
+    ```sql
+    -- Example: Datadog query
+    @level:error @scope:database
+    
+    -- Example: LogDNA query
+    level:error scope:cache
+    ```
+  </Step>
+</Steps>
+
+### Custom queries
+
+Example queries for common investigations:
+
+<CodeGroup>
+```sql Datadog
+-- All database errors in last hour
+@level:error @scope:database @ts:>now-1h
+
+-- Cache operations by source
+@scope:cache | count by @context.source
+
+-- Geocoding fallback frequency
+@scope:geocoding @message:"Using arrondissement fallback"
+```
+
+```sql LogDNA
+-- Failed backup attempts
+level:error scope:backup
+
+-- Admin authentication events
+scope:auth message:"Admin session"
+
+-- Rate limit violations
+scope:auth message:"Rate limit exceeded" | count by context.ip
+```
+</CodeGroup>
+
+## Alerting
+
+Set up alerts for critical issues:
+
+### Database connectivity
+
+```
+Alert when: @level:error @scope:database @message:"Connection failed"
+Threshold: > 3 occurrences in 5 minutes
+Action: Page on-call engineer
+```
+
+### Backup failures
+
+```
+Alert when: @level:error @scope:backup @message:"Snapshot creation failed"
+Threshold: > 1 occurrence
+Action: Slack notification to ops channel
+```
+
+### High error rate
+
+```
+Alert when: @level:error
+Threshold: > 10 errors per minute
+Action: PagerDuty alert
+```
+
+## Debug mode
+
+For intensive debugging, temporarily increase log verbosity:
+
+```typescript
+// lib/platform/logger.ts
+
+// Disable deduplication temporarily
+const DEV_INFO_DEDUPE_WINDOW_MS = 0; // Set to 0
+
+// Or add temporary debug logs
+log.info("debug", "Variable state", { foo, bar, baz });
+```
+
+<Warning>
+  Remember to remove debug logs before committing. Use `git diff` to review changes.
+</Warning>
+
+## Performance impact
+
+Logging overhead is minimal:
+
+- **Development**: ~0.1-0.5ms per log (includes console formatting)
+- **Production**: ~0.05-0.2ms per log (JSON serialization only)
+- **Deduplication**: O(1) lookup in Map (negligible)
+
+For high-throughput operations, batch log context:
+
+```typescript
+// Good: Single log with batch summary
+log.info("geocoding", "Batch completed", {
+  total: 150,
+  cached: 140,
+  fetched: 10,
+  failed: 0
+});
+
+// Avoid: 150 individual logs
+for (const address of addresses) {
+  log.info("geocoding", "Geocoded address", { address }); // Too noisy!
+}
+```
+
+## Next steps
+
+- [Set up backups](/operations/backup-recovery) for disaster recovery
+- [Harden serverless runtime](/operations/serverless-hardening) for production
+- [Configure PostgreSQL](/operations/postgres-setup) for optimal performance

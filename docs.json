@@ -1,122 +1,134 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "OOOC Fête Finder",
+  "theme": "almond",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#FF6B6B",
+    "light": "#FFE5E5",
+    "dark": "#CC5555"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/KingPsychopath/oooc-fete-finder"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/KingPsychopath/oooc-fete-finder"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "environment-setup"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Architecture",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "architecture/overview",
+              "architecture/data-flow",
+              "architecture/event-identity",
+              "architecture/engagement-tracking"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Admin Guide",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "admin/workflow",
+              "admin/content-management",
+              "admin/featured-events",
+              "admin/submissions-moderation",
+              "admin/analytics"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Operations",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "operations/deployment",
+              "operations/postgres-setup",
+              "operations/serverless-hardening",
+              "operations/logging",
+              "operations/backup-recovery"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/google-sheets",
+              "integrations/geocoding",
+              "integrations/stripe-webhooks"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/rate-limiting",
+              "security/abuse-protection",
+              "security/auth-model"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Public APIs",
             "pages": [
-              "api-reference/introduction"
+              "api/auth",
+              "api/event-submissions",
+              "api/tracking",
+              "api/partner-stats"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Admin APIs",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/admin/health",
+              "api/admin/data-store",
+              "api/admin/sessions"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/revalidation",
+              "api/webhooks",
+              "api/cron-jobs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/environment-variables",
+              "reference/data-modes",
+              "reference/caching-policy"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "reference/scripts",
+              "reference/testing",
+              "reference/troubleshooting"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

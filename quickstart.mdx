@@ -1,80 +1,250 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Get OOOC Fête Finder running locally in minutes
 ---
 
-## Get started in three steps
+Get OOOC Fête Finder up and running on your local machine in just a few minutes. This guide walks you through the essential setup steps to start developing with the app.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have the following installed:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<CardGroup cols={3}>
+  <Card title="Node.js" icon="node-js">
+    Version 18.x or higher
+  </Card>
+  <Card title="pnpm" icon="box">
+    Version 8.x or higher
+  </Card>
+  <Card title="PostgreSQL" icon="database">
+    Version 14.x or higher
+  </Card>
+</CardGroup>
 
-### Step 2: Deploy your changes
+## Installation
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
+Follow these steps to get your development environment set up:
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the OOOC Fête Finder repository to your local machine:
+
+    ```bash
+    git clone https://github.com/KingPsychopath/oooc-fete-finder.git
+    cd oooc-fete-finder
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all required dependencies using pnpm:
+
+    ```bash
+    pnpm install
+    ```
+
+    This will install Next.js, React, Postgres client, and all other dependencies defined in `package.json`.
+  </Step>
+
+  <Step title="Configure environment variables">
+    Create a `.env` file in the root directory by copying the example file:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Edit `.env` and set the required variables:
+
+    ```bash
+    # Required - Generate with: openssl rand -base64 32
+    AUTH_SECRET="your-random-32-plus-character-secret"
+
+    # Required - Your PostgreSQL connection string
+    DATABASE_URL="postgresql://user:password@localhost:5432/oooc_fete"
+
+    # Required - Data mode (use "remote" for production-like setup)
+    DATA_MODE="remote"
+
+    # Optional but recommended for full admin access
+    ADMIN_KEY="your-admin-password"
+    ```
+
+    <Note>
+      Generate a secure `AUTH_SECRET` using: `openssl rand -base64 32`
+    </Note>
+  </Step>
+
+  <Step title="Bootstrap the database">
+    Initialize the Postgres event store with sample data:
+
+    ```bash
+    pnpm bootstrap:postgres-store
+    ```
+
+    This script will:
+    - Create the required database tables
+    - Seed initial event data from CSV
+    - Set up the event store schema
+  </Step>
+
+  <Step title="Start the development server">
+    Run the Next.js development server:
+
+    ```bash
+    pnpm dev
+    ```
+
+    The app will be available at `http://localhost:3000`
+  </Step>
+
+  <Step title="Verify the installation">
+    Open your browser and navigate to:
+    - **Homepage**: `http://localhost:3000` - View public event listings
+    - **Admin**: `http://localhost:3000/admin` - Access admin console (requires `ADMIN_KEY`)
+
+    <Info>
+      If you set an `ADMIN_KEY` in your environment, you'll be able to log in to the admin panel and manage events.
+    </Info>
+  </Step>
+</Steps>
+
+## Verify your setup
+
+<Tabs>
+  <Tab title="Health check">
+    Run the health check script to verify all systems are working:
+
+    ```bash
+    pnpm health:check
+    ```
+
+    You should see output confirming:
+    - ✓ Database connection is active
+    - ✓ Event store is populated
+    - ✓ Admin endpoints are accessible
+  </Tab>
+
+  <Tab title="Manual verification">
+    Check these endpoints manually:
+
+    ```bash
+    # Public homepage (should return event data)
+    curl http://localhost:3000
+
+    # Admin health check (requires ADMIN_KEY)
+    curl -H "Authorization: Bearer $ADMIN_KEY" http://localhost:3000/api/admin/health
+    ```
+  </Tab>
+
+  <Tab title="Database check">
+    Use the interactive database CLI to inspect your data:
+
+    ```bash
+    pnpm db:cli
+    ```
+
+    This will show you:
+    - Row count and column count
+    - Store metadata and settings
+    - Data source status
+  </Tab>
+</Tabs>
+
+## Optional: Bootstrap featured events
+
+If you want to set up featured event scheduling:
+
+```bash
+pnpm bootstrap:featured-schedule
+```
+
+This migrates any legacy `Featured` values from CSV rows into the dedicated featured event scheduler queue.
+
+## Development commands
+
+Here are the most common commands you'll use during development:
+
+| Command | Description |
+|---------|-------------|
+| `pnpm dev` | Start development server with hot reload |
+| `pnpm build` | Build the production application |
+| `pnpm start` | Start production server (after build) |
+| `pnpm lint` | Run Biome linter |
+| `pnpm lint:fix` | Auto-fix linting issues |
+| `pnpm test` | Run Vitest tests |
+| `pnpm test:watch` | Run tests in watch mode |
+| `pnpm db:cli` | Interactive database status CLI |
+
+## Troubleshooting
+
+<Accordion title="Port 3000 is already in use">
+  If port 3000 is already in use, you can specify a different port:
+
+  ```bash
+  pnpm dev -- -p 3001
+  ```
 </Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Accordion title="Database connection failed">
+  Verify your `DATABASE_URL` is correct and PostgreSQL is running:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  ```bash
+  # Check if PostgreSQL is running
+  psql -h localhost -U your_user -d oooc_fete -c "SELECT 1;"
+  ```
 
-### Step 3: Go live
+  Common issues:
+  - PostgreSQL service not running
+  - Incorrect credentials in `DATABASE_URL`
+  - Database does not exist (create it first: `createdb oooc_fete`)
+</Accordion>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
+<Accordion title="AUTH_SECRET error">
+  If you see errors about `AUTH_SECRET`:
+
+  1. Ensure it's set in your `.env` file
+  2. Make sure it's at least 32 characters long
+  3. Generate a new one: `openssl rand -base64 32`
+  4. Restart the dev server after updating `.env`
+</Accordion>
+
+<Accordion title="DATA_MODE not set">
+  If you see "DATA_MODE is required in production":
+
+  ```bash
+  # Add to your .env file
+  DATA_MODE="remote"
+  ```
+
+  Valid values:
+  - `remote` - Use Postgres as primary source (recommended)
+  - `local` - Use local CSV files only
+  - `test` - Use in-memory test data
+</Accordion>
+
+<Accordion title="Admin access denied">
+  If you can't access `/admin`:
+
+  1. Ensure `ADMIN_KEY` is set in `.env`
+  2. Clear your browser cookies and try again
+  3. Check that you're entering the correct admin password
+  4. Restart the dev server after setting `ADMIN_KEY`
 </Accordion>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+Now that you have OOOC Fête Finder running locally, explore these guides:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Environment setup" icon="gear" href="/environment-setup">
+    Learn about all available environment variables
+  </Card>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand the system architecture
+  </Card>
+  <Card title="Admin workflow" icon="user-lock" href="/admin/workflow">
+    Learn how to manage events and content
+  </Card>
+  <Card title="API reference" icon="code" href="/api/auth">
+    Explore the public and admin APIs
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

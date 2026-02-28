@@ -1,0 +1,543 @@
+---
+title: Backup and recovery
+description: Event store backup procedures and disaster recovery for OOOC Fête Finder
+---
+
+## Overview
+
+OOOC Fête Finder provides automated and manual backup capabilities for event data and featured schedule. Backups are stored in PostgreSQL with configurable retention policies.
+
+## Backup system architecture
+
+The backup system captures:
+
+- **Event store data**: All event rows and columns from `app_event_store_*` tables
+- **Featured schedule**: Spotlight and promoted placements from featured event repository
+- **Metadata**: Row count, checksum, update timestamp, origin
+
+### Backup storage
+
+Backups are stored in PostgreSQL tables:
+
+```sql
+CREATE TABLE app_event_store_backups (
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL,
+  created_by TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  row_count INTEGER NOT NULL,
+  featured_entry_count INTEGER NOT NULL,
+  store_updated_at TIMESTAMPTZ,
+  store_checksum TEXT NOT NULL,
+  csv_content TEXT NOT NULL,
+  featured_entries_json TEXT NOT NULL
+);
+```
+
+### Backup triggers
+
+Backups can be created via:
+
+- **Manual**: Admin panel "Backup Now" button
+- **Cron**: Daily automated backups at 04:20 UTC
+- **Pre-restore**: Automatic snapshot before restoring a backup
+- **Admin save**: Optional snapshot before event sheet save
+
+## Creating backups
+
+### Manual backup via admin panel
+
+<Steps>
+  <Step title="Navigate to operations">
+    Open `/admin/operations` in your browser.
+  </Step>
+  
+  <Step title="Create snapshot">
+    In the "Event Store Controls" section, click "Backup Now".
+  </Step>
+  
+  <Step title="Verify backup">
+    The backup appears in "Recent Backups" list with:
+    - Snapshot ID
+    - Created timestamp
+    - Row count
+    - Featured entry count
+  </Step>
+</Steps>
+
+### Automated backup via cron
+
+Configured in `vercel.json`:
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/backup-event-store", "schedule": "20 4 * * *" }
+  ]
+}
+```
+
+**Schedule**: Daily at 04:20 UTC  
+**Retention**: Latest 30 snapshots (older backups automatically pruned)
+
+Verify cron execution:
+
+```bash
+# Check cron logs in Vercel dashboard
+# Or manually trigger:
+curl https://your-domain.com/api/cron/backup-event-store \
+  -H "Authorization: Bearer <CRON_SECRET>"
+```
+
+Expected response:
+```json
+{
+  "ok": true,
+  "message": "Backup created (123 rows, 5 featured entries)",
+  "backup": {
+    "id": "backup_20260228_042015",
+    "createdAt": "2026-02-28T04:20:15.000Z",
+    "rowCount": 123,
+    "featuredEntryCount": 5
+  },
+  "prunedCount": 2
+}
+```
+
+<Info>
+  Set `CRON_SECRET` in environment variables to enable cron-triggered backups.
+</Info>
+
+### Programmatic backup via service
+
+Create backups programmatically:
+
+```typescript
+import { EventStoreBackupService } from "@/features/data-management/event-store-backup-service";
+
+const result = await EventStoreBackupService.createBackup({
+  createdBy: "admin",
+  trigger: "manual"
+});
+
+if (result.success) {
+  console.log(result.message); // "Backup created (123 rows, 5 featured entries)"
+  console.log(result.backup.id); // "backup_20260228_103045"
+  console.log(result.prunedCount); // 1
+}
+```
+
+## Backup retention
+
+The system maintains **30 most recent backups**:
+
+```typescript
+const BACKUP_RETENTION_LIMIT = 30;
+
+// After each backup creation:
+const prunedCount = await repository.pruneOldBackups(BACKUP_RETENTION_LIMIT);
+```
+
+<Note>
+  Retention applies per environment. Production and Preview environments maintain separate backup histories.
+</Note>
+
+### Retention policy details
+
+- **Retention count**: 30 snapshots
+- **Pruning**: Automatic after each backup creation
+- **Sort order**: Oldest backups deleted first
+- **Exception**: Manual backups have same retention as automated backups
+
+## Restoring backups
+
+### Restore via admin panel
+
+<Steps>
+  <Step title="Navigate to operations">
+    Open `/admin/operations`.
+  </Step>
+  
+  <Step title="Select backup">
+    In "Recent Backups" section:
+    - Click "Restore Latest" for most recent backup
+    - Or select specific snapshot and click "Restore"
+  </Step>
+  
+  <Step title="Confirm restoration">
+    The system will:
+    1. Create pre-restore snapshot of current data
+    2. Restore selected backup to event store
+    3. Restore featured schedule entries
+    4. Display confirmation with row counts
+  </Step>
+  
+  <Step title="Revalidate homepage">
+    Click "Save and Revalidate Homepage" to publish restored data.
+  </Step>
+  
+  <Step title="Verify restoration">
+    Check "Live Runtime Snapshot" to confirm:
+    - Row count matches restored backup
+    - Data source is `postgres-store`
+    - Update timestamp is recent
+  </Step>
+</Steps>
+
+### Restore via service
+
+Restore programmatically:
+
+<CodeGroup>
+```typescript Restore latest
+import { EventStoreBackupService } from "@/features/data-management/event-store-backup-service";
+
+const result = await EventStoreBackupService.restoreLatestBackup({
+  createdBy: "admin"
+});
+
+if (result.success) {
+  console.log(result.message); // "Restored latest backup from 2/28/2026, 10:30:00 AM"
+  console.log(result.restoredRowCount); // 123
+  console.log(result.restoredFeaturedCount); // 5
+}
+```
+
+```typescript Restore specific backup
+import { EventStoreBackupService } from "@/features/data-management/event-store-backup-service";
+
+const result = await EventStoreBackupService.restoreBackup({
+  createdBy: "admin",
+  backupId: "backup_20260227_150000"
+});
+
+if (result.success) {
+  console.log(result.restoredFrom.id); // "backup_20260227_150000"
+  console.log(result.preRestoreBackup?.id); // "backup_pre_restore_20260228"
+}
+```
+</CodeGroup>
+
+### Pre-restore snapshot
+
+Before restoring, the system automatically:
+
+1. Captures current event store state
+2. Creates pre-restore backup with trigger `"pre-restore"`
+3. Prunes old backups to maintain retention limit
+4. Proceeds with restoration
+
+<Warning>
+  Pre-restore snapshots count toward the 30-backup retention limit. Very old pre-restore snapshots may be pruned.
+</Warning>
+
+## Backup contents
+
+### Event store CSV
+
+Full event data in CSV format:
+
+```csv
+Event Key,Title,Date,Location,Categories,Tags,...
+event_001,Live Jazz at Blue Note,2026-03-15,6 Rue de l'Arbre Sec,Music,jazz;live,...
+event_002,Art Exhibition Opening,2026-03-20,Galerie Perrotin,Art,contemporary;gallery,...
+```
+
+### Featured schedule JSON
+
+Spotlight and promoted placements:
+
+```json
+[
+  {
+    "id": "featured_001",
+    "eventKey": "event_001",
+    "requestedStartAt": "2026-03-15T00:00:00.000Z",
+    "effectiveStartAt": "2026-03-15T00:00:00.000Z",
+    "effectiveEndAt": "2026-03-18T00:00:00.000Z",
+    "durationHours": 72,
+    "status": "scheduled",
+    "createdBy": "admin",
+    "createdAt": "2026-02-28T10:00:00.000Z",
+    "updatedAt": "2026-02-28T10:00:00.000Z"
+  }
+]
+```
+
+### Metadata
+
+```json
+{
+  "id": "backup_20260228_042015",
+  "createdAt": "2026-02-28T04:20:15.000Z",
+  "createdBy": "cron",
+  "trigger": "cron",
+  "rowCount": 123,
+  "featuredEntryCount": 5,
+  "storeUpdatedAt": "2026-02-28T03:45:00.000Z",
+  "storeChecksum": "a1b2c3d4e5f67890"
+}
+```
+
+## Backup status and health
+
+Check backup system health:
+
+### Via admin panel
+
+From `/admin/operations`:
+
+- **Latest backup**: Timestamp and row count
+- **Backup count**: Total snapshots in retention
+- **Recent backups**: List with details
+
+### Via service
+
+```typescript
+import { EventStoreBackupService } from "@/features/data-management/event-store-backup-service";
+
+const statusResult = await EventStoreBackupService.getBackupStatus();
+if (statusResult.supported) {
+  const { status } = statusResult;
+  console.log(status.latestBackup?.createdAt); // "2026-02-28T04:20:15.000Z"
+  console.log(status.backupCount); // 28
+}
+
+const listResult = await EventStoreBackupService.listRecentBackups(10);
+if (listResult.supported) {
+  for (const backup of listResult.backups) {
+    console.log(`${backup.id}: ${backup.rowCount} rows`);
+  }
+}
+```
+
+## Disaster recovery procedures
+
+### Scenario 1: Accidental data deletion
+
+<Steps>
+  <Step title="Identify issue">
+    Notice missing or incorrect events on homepage.
+  </Step>
+  
+  <Step title="Navigate to admin operations">
+    Open `/admin/operations`.
+  </Step>
+  
+  <Step title="Restore latest backup">
+    Click "Restore Latest Backup".
+  </Step>
+  
+  <Step title="Revalidate">
+    Click "Save and Revalidate Homepage".
+  </Step>
+  
+  <Step title="Verify">
+    Check homepage to confirm events are restored.
+  </Step>
+</Steps>
+
+### Scenario 2: Database corruption
+
+<Steps>
+  <Step title="Assess damage">
+    Run health check:
+    ```bash
+    DATABASE_URL="your-url" pnpm health:check
+    ```
+  </Step>
+  
+  <Step title="Drop corrupted tables">
+    ```sql
+    DROP TABLE IF EXISTS app_event_store_rows;
+    DROP TABLE IF EXISTS app_event_store_columns;
+    DROP TABLE IF EXISTS app_event_store_meta;
+    ```
+  </Step>
+  
+  <Step title="Re-bootstrap database">
+    ```bash
+    DATABASE_URL="your-url" pnpm bootstrap:postgres-store
+    ```
+  </Step>
+  
+  <Step title="Restore from backup">
+    From `/admin/operations`, restore latest backup.
+  </Step>
+  
+  <Step title="Verify data integrity">
+    ```bash
+    DATABASE_URL="your-url" pnpm db:cli status
+    ```
+  </Step>
+</Steps>
+
+### Scenario 3: Complete database loss
+
+<Steps>
+  <Step title="Provision new database">
+    Create new PostgreSQL database and obtain `DATABASE_URL`.
+  </Step>
+  
+  <Step title="Update environment variables">
+    Set new `DATABASE_URL` in Vercel dashboard.
+  </Step>
+  
+  <Step title="Bootstrap new database">
+    ```bash
+    DATABASE_URL="new-url" pnpm bootstrap:postgres-store
+    ```
+  </Step>
+  
+  <Step title="Manual data recovery">
+    If backups were in lost database:
+    - Use local CSV from `data/events.csv`
+    - Or restore from Google Sheets backup
+    - Or upload CSV via admin panel
+  </Step>
+  
+  <Step title="Rebuild backups">
+    Create new baseline backup:
+    ```bash
+    curl https://your-domain.com/api/cron/backup-event-store \
+      -H "Authorization: Bearer <CRON_SECRET>"
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Complete database loss means losing all backups stored in that database. Implement off-database backup strategy for critical deployments.
+</Warning>
+
+## Off-database backup strategy
+
+For production environments, implement additional backup layers:
+
+### Google Sheets as backup store
+
+Configure Google Sheets integration:
+
+```bash
+# Environment variables
+GOOGLE_SHEET_ID=your-sheet-id
+GOOGLE_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
+```
+
+Periodic export to Google Sheets:
+
+1. From `/admin/operations`, click "Export to Google Sheets"
+2. Or configure custom automation to call export endpoint
+3. Verify sheet is updated with latest events
+
+### CSV export via admin panel
+
+Manual CSV download:
+
+1. Navigate to `/admin/content`
+2. Open "Event Sheet Editor"
+3. Click "Export CSV"
+4. Save to secure location (encrypted storage, version control)
+
+### Database-level backups
+
+Use your database provider's native backup:
+
+<CodeGroup>
+```bash Vercel Postgres
+# Automatic backups included
+# Configure retention in Vercel dashboard
+# Storage > Database > Settings > Backups
+```
+
+```bash Neon
+# Point-in-time restore (PITR) available
+# Restores to any point within retention window
+# Configure in Neon console > Settings
+```
+
+```bash Supabase
+# Daily automated backups
+# Configure in Supabase dashboard
+# Database > Backups
+```
+</CodeGroup>
+
+## Backup best practices
+
+### Regular backup schedule
+
+<Steps>
+  <Step title="Enable automated cron backups">
+    Verify `CRON_SECRET` is set and cron job is registered in Vercel.
+  </Step>
+  
+  <Step title="Monitor backup success">
+    Check Vercel cron logs or set up alerts for backup failures.
+  </Step>
+  
+  <Step title="Test restore procedure monthly">
+    Perform test restoration to verify backup integrity:
+    1. Restore backup in preview environment
+    2. Verify data completeness
+    3. Document restore time
+  </Step>
+</Steps>
+
+### Pre-change snapshots
+
+Create manual backups before:
+
+- Bulk event imports
+- Major content changes
+- Schema migrations
+- Featured schedule changes
+
+### Retention planning
+
+With 30-backup retention and daily cron:
+
+- **Coverage**: 30 days of history
+- **Granularity**: Daily snapshots
+- **Manual backups**: Count toward 30-backup limit
+
+For longer retention:
+
+- Export critical backups to external storage
+- Use database provider's native backup (separate retention)
+- Archive CSV exports to cloud storage
+
+## Monitoring backup health
+
+Set up alerts for:
+
+### Backup age
+
+```sql
+-- Alert if latest backup is older than 48 hours
+SELECT created_at
+FROM app_event_store_backups
+ORDER BY created_at DESC
+LIMIT 1;
+```
+
+### Backup failures
+
+Monitor cron logs for:
+
+```json
+{"ok": false, "message": "Failed to create event store backup", "error": "..."}
+```
+
+### Backup count
+
+```sql
+-- Alert if backup count is unusually low
+SELECT COUNT(*) FROM app_event_store_backups;
+-- Expected: ~30 (or close to retention limit)
+```
+
+## Next steps
+
+- [Configure logging](/operations/logging) to monitor backup operations
+- [Set up deployment](/operations/deployment) with automated backups
+- [Harden serverless runtime](/operations/serverless-hardening) for production

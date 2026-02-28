@@ -1,0 +1,235 @@
+---
+title: Featured event scheduling
+description: Schedule Spotlight and Promoted placements using the unified scheduler with queue management and concurrent slot controls
+---
+
+The Spotlight & Promoted Scheduler manages all featured placements on OOOC Fête Finder. It supports time-based scheduling, queue management, and concurrent slot limits for Spotlight placements.
+
+## Placement types
+
+<CardGroup cols={2}>
+  <Card title="Spotlight" icon="star">
+    High-visibility carousel placement with concurrent slot limits (default: 3 events maximum)
+  </Card>
+  <Card title="Promoted" icon="arrow-up">
+    Standard promoted listing with unlimited concurrent slots
+  </Card>
+</CardGroup>
+
+## Scheduler overview
+
+The scheduler provides:
+
+- Unified interface for Spotlight and Promoted placements
+- Time-based scheduling in Paris timezone (CET / GMT+1)
+- Queue management with active, upcoming, and completed entries
+- Concurrent slot tracking for Spotlight
+- Reschedule and cancel operations
+- History cleanup for completed placements
+
+<Info>
+All timestamps use **Europe/Paris** timezone (CET / GMT+1). The timezone is displayed in the scheduler header.
+</Info>
+
+## Scheduling a featured event
+
+<Steps>
+  <Step title="Select placement type">
+    Toggle between **Spotlight** and **Promoted** using the mode switcher
+  </Step>
+  
+  <Step title="Find the event">
+    Search by event name or key in the "Find event" field. The top 2 matches appear as suggestions
+  </Step>
+  
+  <Step title="Select event">
+    Click a suggestion to select the event. The selection is confirmed with a badge
+  </Step>
+  
+  <Step title="Set schedule time">
+    Use the **Schedule at** datetime picker to set the start time in Paris timezone
+  </Step>
+  
+  <Step title="Set duration">
+    Enter duration in hours (1-168 hours supported, default: 48 hours)
+  </Step>
+  
+  <Step title="Choose activation mode">
+    - Click **Feature now** / **Promote now** to start immediately
+    - Click **Schedule** to queue for the selected time
+  </Step>
+</Steps>
+
+<Note>
+Scheduling multiple Spotlight events when all 3 slots are active queues them. The queue automatically activates entries as slots become available.
+</Note>
+
+## Queue states
+
+Each scheduled entry has a state based on timing:
+
+| State | Description | Badge Color |
+|-------|-------------|-------------|
+| Active | Currently live on the site | Green (default) |
+| Upcoming | Scheduled for future activation | Yellow (secondary) |
+| Recent Ended | Ended within the recent window | Gray (outline) |
+| Completed | Ended outside the recent window | Gray (outline) |
+| Cancelled | Manually cancelled before completion | Red (destructive) |
+
+## Managing scheduled entries
+
+The queue timeline shows all entries with detailed controls.
+
+### Reschedule an entry
+
+<Steps>
+  <Step title="Find the entry">
+    Locate the scheduled entry in the Queue and history table
+  </Step>
+  
+  <Step title="Edit start time">
+    Modify the datetime-local input in the Actions column
+  </Step>
+  
+  <Step title="Click Reschedule">
+    The entry's effective start and end times update automatically
+  </Step>
+</Steps>
+
+### Cancel an entry
+
+Click the **Cancel** button in the Actions column. The entry's status changes to `cancelled` and it's removed from active or upcoming queue.
+
+<Warning>
+Cancelling an **Active** Spotlight entry immediately removes it from the live site. Verify before confirming.
+</Warning>
+
+### Clear the queue
+
+Click **Clear Scheduled Queue** to remove all scheduled entries (active, upcoming).
+
+<Steps>
+  <Step title="Click Clear Scheduled Queue">
+    Located in the Queue and history header
+  </Step>
+  
+  <Step title="Confirm removal">
+    If active slots exist, you'll receive two confirmation prompts
+  </Step>
+  
+  <Step title="Verify queue">
+    The queue empties and active slots are cleared
+  </Step>
+</Steps>
+
+### Clear history
+
+Click **Clear History** to remove completed and cancelled entries from the timeline.
+
+This keeps the interface clean without affecting active or upcoming entries.
+
+## Concurrent slot management
+
+### Spotlight slots
+
+Spotlight supports a maximum of 3 concurrent events (configurable):
+
+```text
+Active Slots: 2/3
+```
+
+When all slots are filled:
+- New "Feature now" requests queue as upcoming
+- The queue automatically activates entries when slots free up
+- Queue position shows placement order (`#1`, `#2`, etc.)
+
+### Promoted slots
+
+Promoted placements have **unlimited concurrent slots**:
+
+```text
+Active Slots: 7
+```
+
+All "Promote now" requests activate immediately.
+
+## Queue metrics
+
+The dashboard shows real-time queue statistics:
+
+| Metric | Description |
+|--------|-------------|
+| Active Slots | Currently live entries (with max limit for Spotlight) |
+| Upcoming | Scheduled but not yet active |
+| Recent Ended | Completed within the recent window (default: 24 hours) |
+| Scheduled | Total active + upcoming entries |
+
+## Timezone handling
+
+All scheduling uses **Europe/Paris** timezone:
+
+- **Requested**: The time you set in the scheduler
+- **Effective Start**: Actual activation time (may differ if queued)
+- **Effective End**: Calculated as Effective Start + Duration
+
+<Info>
+The `datetime-local` input automatically converts to Paris timezone. Your browser's local timezone is handled transparently.
+</Info>
+
+## Event selection
+
+The event finder searches across:
+- Event name (partial match)
+- Event key (exact or partial match)
+
+Up to 50 matches are found, with the top 2 shown as clickable suggestions.
+
+### Selected event badge
+
+When an event is selected, a badge confirms the selection:
+
+```text
+[Selected] Techno Night at Rex Club [Clear]
+```
+
+Click **Clear** to reset the selection.
+
+## Default duration
+
+Both Spotlight and Promoted use a default duration of **48 hours** (configurable per placement type).
+
+You can override this by setting a custom duration (1-168 hours) before scheduling.
+
+## Paid order fulfillment
+
+Partner promotion requests appear in the **Paid Orders Queue** card (on the same Placements page).
+
+To fulfill a paid order:
+
+<Steps>
+  <Step title="Review the order">
+    Check order details, event key, and requested placement type
+  </Step>
+  
+  <Step title="Use the scheduler">
+    Schedule the event using the Spotlight & Promoted Scheduler as normal
+  </Step>
+  
+  <Step title="Mark order fulfilled">
+    Update the order status in the Paid Orders Queue
+  </Step>
+  
+  <Step title="Share stats link (optional)">
+    Generate a partner stats link if required by the order
+  </Step>
+</Steps>
+
+## Best practices
+
+- **Schedule during low traffic** for major changes to avoid user confusion
+- **Use upcoming slots** to plan multi-day campaigns in advance
+- **Monitor active count** to ensure Spotlight slots aren't oversaturated
+- **Test duration** with 24-hour slots before committing to longer placements
+- **Check queue position** when all Spotlight slots are full
+- **Clear history weekly** to keep the timeline readable
+- **Use Promoted** for general visibility without slot competition

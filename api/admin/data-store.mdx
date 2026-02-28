@@ -1,0 +1,204 @@
+---
+title: Data store status
+description: Monitor data store and runtime metrics
+---
+
+The data store status endpoint provides real-time information about the event data store, configuration, and runtime metrics.
+
+## Get data store status
+
+<CodeGroup>
+```bash Request
+GET /api/admin/data-store/status
+```
+</CodeGroup>
+
+### Authentication
+
+<Warning>
+This endpoint requires admin authentication. Include one of the following:
+- `x-admin-key` header with your admin key
+- `Authorization: Bearer <token>` header with a valid admin session token
+- Valid admin session cookie
+</Warning>
+
+<Note>
+This endpoint accepts credentials via `x-admin-key` header or `Authorization: Bearer` header interchangeably.
+</Note>
+
+### Response
+
+Returns current data store status, configuration, and runtime metrics.
+
+<ResponseField name="success" type="boolean" required>
+  Whether the request succeeded
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp of the status check
+</ResponseField>
+
+<ResponseField name="store" type="object" required>
+  Local event store status information
+  
+  <ResponseField name="store.provider" type="string">
+    Storage provider type (e.g., "postgres", "vercel")
+  </ResponseField>
+  
+  <ResponseField name="store.providerLocation" type="string">
+    Location identifier for the storage provider
+  </ResponseField>
+  
+  <ResponseField name="store.hasStoreData" type="boolean">
+    Whether the store contains data
+  </ResponseField>
+  
+  <ResponseField name="store.keyCount" type="number">
+    Number of keys in the store
+  </ResponseField>
+  
+  <ResponseField name="store.rowCount" type="number">
+    Number of rows in the event data
+  </ResponseField>
+  
+  <ResponseField name="store.updatedAt" type="string | null">
+    Last update timestamp
+  </ResponseField>
+  
+  <ResponseField name="store.updatedBy" type="string">
+    Identity of the last updater
+  </ResponseField>
+  
+  <ResponseField name="store.origin" type="string">
+    Origin of the data (e.g., "manual", "import", "sync")
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="config" type="object" required>
+  Data configuration status
+  
+  <ResponseField name="config.dataSource" type="string">
+    Configured data source (e.g., "store", "remote")
+  </ResponseField>
+  
+  <ResponseField name="config.remoteConfigured" type="boolean">
+    Whether a remote data source is configured
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="runtime" type="object" required>
+  Runtime data source status
+  
+  <ResponseField name="runtime.dataSource" type="string">
+    Currently active data source in runtime
+  </ResponseField>
+  
+  <ResponseField name="runtime.eventCount" type="number">
+    Number of events currently loaded in runtime
+  </ResponseField>
+  
+  <ResponseField name="runtime.lastFetchTime" type="string | null">
+    Timestamp of last data fetch attempt
+  </ResponseField>
+  
+  <ResponseField name="runtime.lastRemoteErrorMessage" type="string | null">
+    Error message from last remote fetch (if any)
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="metrics" type="object" required>
+  Runtime performance metrics
+  
+  <ResponseField name="metrics.requestCount" type="number">
+    Total number of data requests
+  </ResponseField>
+  
+  <ResponseField name="metrics.cacheHits" type="number">
+    Number of cache hits
+  </ResponseField>
+  
+  <ResponseField name="metrics.cacheMisses" type="number">
+    Number of cache misses
+  </ResponseField>
+  
+  <ResponseField name="metrics.averageResponseTime" type="number">
+    Average response time in milliseconds
+  </ResponseField>
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "success": true,
+  "timestamp": "2026-02-28T10:30:00.000Z",
+  "store": {
+    "provider": "postgres",
+    "providerLocation": "us-east-1",
+    "hasStoreData": true,
+    "keyCount": 3,
+    "rowCount": 148,
+    "updatedAt": "2026-02-28T08:15:00.000Z",
+    "updatedBy": "admin@example.com",
+    "origin": "import"
+  },
+  "config": {
+    "dataSource": "store",
+    "remoteConfigured": false
+  },
+  "runtime": {
+    "dataSource": "store",
+    "eventCount": 148,
+    "lastFetchTime": "2026-02-28T10:29:55.000Z",
+    "lastRemoteErrorMessage": null
+  },
+  "metrics": {
+    "requestCount": 1250,
+    "cacheHits": 1100,
+    "cacheMisses": 150,
+    "averageResponseTime": 45.2
+  }
+}
+```
+
+### Error responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+**401 Unauthorized**
+
+```json
+{
+  "success": false,
+  "error": "Unauthorized"
+}
+```
+
+**500 Internal Server Error**
+
+```json
+{
+  "success": false,
+  "error": "Failed to fetch store status"
+}
+```
+
+## Use cases
+
+### Monitoring data freshness
+
+Use the `store.updatedAt` and `runtime.lastFetchTime` fields to monitor when data was last updated and fetched.
+
+### Detecting configuration issues
+
+Compare `config.dataSource` with `runtime.dataSource` to ensure the runtime is using the expected data source. Check `runtime.lastRemoteErrorMessage` for remote data fetch issues.
+
+### Performance monitoring
+
+Use the `metrics` object to track cache hit rates and response times. A low cache hit rate may indicate inefficient caching or high data volatility.
+
+<Note>
+This endpoint provides a lighter-weight alternative to the `/api/admin/health` endpoint when you only need store and runtime status without detailed validation and count comparisons.
+</Note>

@@ -1,0 +1,551 @@
+---
+title: Environment setup
+description: Complete guide to configuring all environment variables for OOOC Fête Finder in development and production.
+---
+
+# Environment setup
+
+This guide covers all environment variables used by OOOC Fête Finder. Copy `.env.example` to `.env.local` for local development, and configure these values in your hosting platform for production deployments.
+
+## Required variables
+
+These variables are **required** for the app to run:
+
+<ParamField path="AUTH_SECRET" type="string" required>
+  **Minimum 32 characters** — used for JWT signing and session security.
+  
+  Generate with:
+  ```bash
+  openssl rand -base64 48
+  ```
+  
+  Example:
+  ```bash
+  AUTH_SECRET=dGhpc2lzYXJlYWxseWxvbmdzZWNyZXR0aGF0aXNtb3JldGhhbjMy
+  ```
+  
+  <Warning>
+    Never commit this value to version control. Use different secrets for development and production.
+  </Warning>
+</ParamField>
+
+<ParamField path="DATABASE_URL" type="string" required>
+  PostgreSQL connection string including user, password, host, port, and database name.
+  
+  Format:
+  ```bash
+  DATABASE_URL=postgresql://user:password@host:5432/dbname?sslmode=require
+  ```
+  
+  Examples:
+  - **Local**: `postgresql://postgres:password@localhost:5432/oooc_fete_finder`
+  - **Vercel Postgres**: Automatically set by Vercel when you add Postgres storage
+  - **Neon**: `postgresql://user:pass@ep-xxx-xxx.us-east-1.aws.neon.tech/dbname?sslmode=require`
+  - **Supabase**: Available in project settings under Database → Connection string
+  
+  <Note>
+    The app reads only `DATABASE_URL`. It does **not** use `PGHOST`, `POSTGRES_*`, or other Postgres environment variables that may be set by your hosting provider.
+  </Note>
+</ParamField>
+
+<ParamField path="DATA_MODE" type="enum" required>
+  Data source mode for the app. **Required in production**.
+  
+  Options:
+  - `remote` — Use Postgres event store (primary) with local CSV fallback
+  - `local` — Use local CSV file only (not recommended for production)
+  - `test` — Use test fixtures (development/testing only)
+  
+  Recommended:
+  ```bash
+  DATA_MODE=remote
+  ```
+  
+  <Warning>
+    In Vercel preview/production environments, `DATA_MODE` is **required**. The app will fail fast at startup if it's missing.
+  </Warning>
+</ParamField>
+
+## Core configuration
+
+These variables control fundamental app behavior:
+
+<ParamField path="NODE_ENV" type="enum" default="development">
+  Node.js environment mode.
+  
+  Options:
+  - `development` — Local development with hot reload
+  - `production` — Production build and runtime
+  - `test` — Testing environment
+  
+  Usually set automatically by your framework or platform.
+</ParamField>
+
+<ParamField path="ADMIN_KEY" type="string">
+  Admin authentication key for accessing `/admin` and admin APIs.
+  
+  Generate with:
+  ```bash
+  openssl rand -hex 24
+  ```
+  
+  Example:
+  ```bash
+  ADMIN_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+  ```
+  
+  <Info>
+    If unset or empty, admin login and all admin API endpoints are **disabled**. This is optional for builds but recommended for any deployment where you need admin access.
+  </Info>
+</ParamField>
+
+<ParamField path="ADMIN_RESET_PASSCODE" type="string">
+  Optional **secondary passcode** for destructive admin actions like factory reset.
+  
+  Generate with:
+  ```bash
+  openssl rand -hex 32
+  ```
+  
+  <Warning>
+    Keep this **different** from `ADMIN_KEY` for step-up authentication on dangerous operations.
+  </Warning>
+</ParamField>
+
+<ParamField path="POSTGRES_POOL_MAX" type="number">
+  Maximum PostgreSQL connection pool size.
+  
+  Defaults:
+  - **Development**: `1`
+  - **Production**: `3`
+  
+  Valid range: `1` to `10`
+  
+  Example:
+  ```bash
+  POSTGRES_POOL_MAX=3
+  ```
+  
+  <Note>
+    Most deployments don't need to change this. Increase only if you see connection pool exhaustion in logs.
+  </Note>
+</ParamField>
+
+## Public variables
+
+These variables are exposed to the client (browser) and must be prefixed with `NEXT_PUBLIC_`:
+
+<ParamField path="NEXT_PUBLIC_SITE_URL" type="string" default="http://localhost:3000">
+  Full public URL of your site, including protocol.
+  
+  Examples:
+  - **Local**: `http://localhost:3000`
+  - **Production**: `https://fete-finder.example.com`
+  
+  ```bash
+  NEXT_PUBLIC_SITE_URL=https://fete-finder.example.com
+  ```
+  
+  Used for:
+  - OG image generation
+  - Share links
+  - API endpoint construction
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_BASE_PATH" type="string" default="">
+  Base path for the app if deployed to a subdirectory.
+  
+  Example for deployment at `example.com/fete`:
+  ```bash
+  NEXT_PUBLIC_BASE_PATH=/fete
+  ```
+  
+  Leave empty for root deployment (most common).
+</ParamField>
+
+## Google integrations
+
+Optional variables for Google Sheets import/preview and geocoding:
+
+<ParamField path="GOOGLE_MAPS_API_KEY" type="string">
+  Google Cloud API key with **Geocoding API** enabled.
+  
+  Setup:
+  1. Create a project in [Google Cloud Console](https://console.cloud.google.com)
+  2. Enable **Geocoding API**
+  3. Create an API key under **Credentials**
+  4. Restrict the key to Geocoding API only (security best practice)
+  
+  ```bash
+  GOOGLE_MAPS_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+  ```
+  
+  <Info>
+    If unset, the app uses **arrondissement center fallback** for event coordinates. This is acceptable for many use cases.
+  </Info>
+</ParamField>
+
+<ParamField path="GOOGLE_SHEET_ID" type="string">
+  Google Sheet ID for admin backup import/preview.
+  
+  Extract from your sheet URL:
+  ```
+  https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/edit
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^
+                                      This is your SHEET_ID
+  ```
+  
+  ```bash
+  GOOGLE_SHEET_ID=1AbCdEfGhIjKlMnOpQrStUvWxYz
+  ```
+  
+  <Note>
+    Required only if you want to import events from Google Sheets via `/admin/operations`.
+  </Note>
+</ParamField>
+
+<ParamField path="GOOGLE_SERVICE_ACCOUNT_KEY" type="string">
+  Google Cloud service account credentials as **compact JSON in one line** (no file path).
+  
+  Setup:
+  1. Create a service account in [Google Cloud Console](https://console.cloud.google.com)
+  2. Grant it access to Google Sheets API
+  3. Generate and download a JSON key
+  4. Share your Google Sheet with the service account email (found in the JSON)
+  5. Compact the JSON to a single line:
+     ```bash
+     cat service-account-key.json | jq -c .
+     ```
+  6. Set as environment variable:
+     ```bash
+     GOOGLE_SERVICE_ACCOUNT_KEY='{"type":"service_account","project_id":"...","private_key":"..."}'
+     ```
+  
+  <Warning>
+    This is sensitive. **Never commit** it to version control. Use your platform's secret management.
+  </Warning>
+</ParamField>
+
+<ParamField path="REMOTE_CSV_URL" type="string">
+  Alternative to Sheet API — direct CSV URL (e.g., "Publish to web" from Google Sheets).
+  
+  Example:
+  ```bash
+  REMOTE_CSV_URL=https://docs.google.com/spreadsheets/d/e/.../pub?output=csv
+  ```
+  
+  <Info>
+    Use **either** Sheet API (`GOOGLE_SHEET_ID` + `GOOGLE_SERVICE_ACCOUNT_KEY`) **or** `REMOTE_CSV_URL`, not both.
+  </Info>
+</ParamField>
+
+## Stripe integration
+
+Optional variables for partner payment processing:
+
+<ParamField path="STRIPE_WEBHOOK_SECRET" type="string">
+  Stripe webhook signing secret for verifying webhook events from Stripe.
+  
+  Setup:
+  1. Create a webhook endpoint in [Stripe Dashboard](https://dashboard.stripe.com/webhooks)
+  2. Point it to: `https://yourdomain.com/api/webhooks/stripe`
+  3. Select events: `checkout.session.completed`
+  4. Copy the signing secret (starts with `whsec_`)
+  
+  ```bash
+  STRIPE_WEBHOOK_SECRET=whsec_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+  ```
+  
+  Required for `/api/webhooks/stripe` to process payment events.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_SPOTLIGHT_STANDARD" type="string">
+  Stripe Payment Link URL for **Spotlight Standard** package.
+  
+  Format:
+  ```bash
+  NEXT_PUBLIC_STRIPE_LINK_SPOTLIGHT_STANDARD=https://buy.stripe.com/XXXXXXXX
+  ```
+  
+  If missing, partner page CTAs fall back to contact email.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_SPOTLIGHT_TAKEOVER" type="string">
+  Stripe Payment Link URL for **Spotlight Takeover** package.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_PROMOTED" type="string">
+  Stripe Payment Link URL for **Promoted** package.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_ADDON_WHATSAPP" type="string">
+  Stripe Payment Link URL for **WhatsApp Add-on**.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_STRIPE_LINK_ADDON_NEWSLETTER" type="string">
+  Stripe Payment Link URL for **Newsletter Add-on**.
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_STANDARD" type="string">
+  Optional mapping of Stripe Payment Link ID to package key for admin queue labels.
+  
+  Example:
+  ```bash
+  STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_STANDARD=plink_XXXXXXXXXXXXXXXXXXXXXXXX
+  ```
+  
+  Helps identify which package was purchased in the admin panel.
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_TAKEOVER" type="string">
+  Payment Link ID for Spotlight Takeover package.
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_PROMOTED" type="string">
+  Payment Link ID for Promoted package.
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_ADDON_WHATSAPP" type="string">
+  Payment Link ID for WhatsApp add-on.
+</ParamField>
+
+<ParamField path="STRIPE_PAYMENT_LINK_ID_ADDON_NEWSLETTER" type="string">
+  Payment Link ID for Newsletter add-on.
+</ParamField>
+
+## Automation & webhooks
+
+Variables for scheduled jobs and deployment hooks:
+
+<ParamField path="CRON_SECRET" type="string">
+  Bearer token for authenticating scheduled cron job requests.
+  
+  Generate with:
+  ```bash
+  openssl rand -base64 48
+  ```
+  
+  Used by:
+  - `/api/cron/cleanup-admin-sessions` — Removes expired admin sessions (7+ days old)
+  - `/api/cron/cleanup-rate-limits` — Removes stale rate limit counters (24h grace)
+  - `/api/cron/backup-event-store` — Creates daily Postgres snapshots at 04:20 UTC
+  
+  Configure in `vercel.json`:
+  ```json
+  {
+    "crons": [
+      {
+        "path": "/api/cron/backup-event-store",
+        "schedule": "20 4 * * *"
+      }
+    ]
+  }
+  ```
+  
+  Vercel automatically sends `Authorization: Bearer <CRON_SECRET>` header.
+</ParamField>
+
+<ParamField path="DEPLOY_REVALIDATE_SECRET" type="string">
+  Bearer token for post-deploy revalidation webhook.
+  
+  Generate with:
+  ```bash
+  openssl rand -base64 48
+  ```
+  
+  After each deployment, call:
+  ```bash
+  curl -X POST "https://yourdomain.com/api/revalidate/deploy" \
+    -H "Authorization: Bearer $DEPLOY_REVALIDATE_SECRET"
+  ```
+  
+  This forces:
+  - Live events reload from Postgres
+  - Homepage revalidation
+  - Immediate data freshness after deploy
+  
+  <Note>
+    Useful when deploying with no code changes but new data in the database.
+  </Note>
+</ParamField>
+
+## Advanced configuration
+
+<ParamField path="ADMIN_NOTIFICATION_CACHE_SECONDS" type="number">
+  Cache duration (in seconds) for admin header notification counters.
+  
+  Examples:
+  - `0` — Disable caching (always fetch fresh)
+  - `15` — Cache for 15 seconds (recommended for testing)
+  - Unset — Use default caching behavior
+  
+  ```bash
+  ADMIN_NOTIFICATION_CACHE_SECONDS=15
+  ```
+  
+  <Info>
+    Lower values provide more real-time notifications but increase database load. Use `0` only for debugging.
+  </Info>
+</ParamField>
+
+## Example configurations
+
+<CodeGroup>
+
+```bash Local Development
+# Core (required)
+NODE_ENV=development
+AUTH_SECRET=<generate-with-openssl-rand-base64-48>
+DATABASE_URL=postgresql://postgres:password@localhost:5432/oooc_fete_finder
+DATA_MODE=remote
+
+# Admin access
+ADMIN_KEY=<generate-with-openssl-rand-hex-24>
+
+# Public URLs
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+NEXT_PUBLIC_BASE_PATH=
+
+# Optional: Google integrations (for testing)
+GOOGLE_MAPS_API_KEY=
+GOOGLE_SHEET_ID=
+GOOGLE_SERVICE_ACCOUNT_KEY=
+```
+
+```bash Vercel Production
+# Core (required)
+AUTH_SECRET=<production-secret-different-from-dev>
+DATABASE_URL=<automatically-set-by-vercel-postgres>
+DATA_MODE=remote
+
+# Admin access
+ADMIN_KEY=<production-admin-key>
+ADMIN_RESET_PASSCODE=<separate-passcode-for-destructive-actions>
+
+# Public URLs
+NEXT_PUBLIC_SITE_URL=https://fete-finder.example.com
+NEXT_PUBLIC_BASE_PATH=
+
+# Google integrations
+GOOGLE_MAPS_API_KEY=<your-geocoding-api-key>
+GOOGLE_SHEET_ID=<your-sheet-id>
+GOOGLE_SERVICE_ACCOUNT_KEY=<compact-json-in-one-line>
+
+# Stripe
+STRIPE_WEBHOOK_SECRET=whsec_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+NEXT_PUBLIC_STRIPE_LINK_SPOTLIGHT_STANDARD=https://buy.stripe.com/XXXXXXXX
+NEXT_PUBLIC_STRIPE_LINK_SPOTLIGHT_TAKEOVER=https://buy.stripe.com/XXXXXXXX
+NEXT_PUBLIC_STRIPE_LINK_PROMOTED=https://buy.stripe.com/XXXXXXXX
+STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_STANDARD=plink_XXXXXXXXXXXXXXXXXXXXXXXX
+STRIPE_PAYMENT_LINK_ID_SPOTLIGHT_TAKEOVER=plink_XXXXXXXXXXXXXXXXXXXXXXXX
+STRIPE_PAYMENT_LINK_ID_PROMOTED=plink_XXXXXXXXXXXXXXXXXXXXXXXX
+
+# Automation
+CRON_SECRET=<cron-authentication-secret>
+DEPLOY_REVALIDATE_SECRET=<post-deploy-webhook-secret>
+```
+
+```bash Minimal Production
+# Minimal config for production without optional features
+AUTH_SECRET=<production-secret>
+DATABASE_URL=<postgres-connection-string>
+DATA_MODE=remote
+ADMIN_KEY=<admin-key>
+NEXT_PUBLIC_SITE_URL=https://fete-finder.example.com
+```
+
+</CodeGroup>
+
+## Validation and testing
+
+The app validates environment variables at startup using [@t3-oss/env-nextjs](https://env.t3.gg) and Zod schemas (see `lib/config/env.ts:65`).
+
+### Common validation errors
+
+<AccordionGroup>
+  <Accordion title="AUTH_SECRET must be at least 32 characters long">
+    Your `AUTH_SECRET` is too short. Generate a proper secret:
+    ```bash
+    openssl rand -base64 48
+    ```
+  </Accordion>
+  
+  <Accordion title="Missing required DATA_MODE in production">
+    `DATA_MODE` is required in Vercel preview/production. Set it explicitly:
+    ```bash
+    DATA_MODE=remote
+    ```
+  </Accordion>
+  
+  <Accordion title="DATABASE_URL is required">
+    Make sure `DATABASE_URL` is set and formatted correctly:
+    ```bash
+    DATABASE_URL=postgresql://user:pass@host:5432/dbname?sslmode=require
+    ```
+  </Accordion>
+  
+  <Accordion title="REMOTE_CSV_URL must be a valid URL">
+    If set, `REMOTE_CSV_URL` must be a complete URL with protocol:
+    ```bash
+    REMOTE_CSV_URL=https://docs.google.com/spreadsheets/d/e/.../pub?output=csv
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Skip validation (not recommended)
+
+You can skip environment validation during build:
+```bash
+SKIP_ENV_VALIDATION=true
+```
+
+<Warning>
+  Only use this for debugging. **Never skip validation in production** — it prevents runtime errors.
+</Warning>
+
+## Security best practices
+
+<Steps>
+  <Step title="Use different secrets for dev and production">
+    Never reuse `AUTH_SECRET`, `ADMIN_KEY`, or other secrets across environments.
+  </Step>
+  
+  <Step title="Store secrets securely">
+    Use your platform's secret management:
+    - **Vercel**: Environment Variables in project settings
+    - **GitHub Actions**: Repository secrets
+    - **Local**: `.env.local` (never commit to git)
+  </Step>
+  
+  <Step title="Restrict API keys">
+    Limit Google Cloud API keys to specific APIs and domains/IPs.
+  </Step>
+  
+  <Step title="Rotate secrets periodically">
+    Change `AUTH_SECRET`, `ADMIN_KEY`, and webhook secrets every 90 days or after team changes.
+  </Step>
+  
+  <Step title="Use step-up authentication">
+    Set `ADMIN_RESET_PASSCODE` different from `ADMIN_KEY` for destructive actions.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Deploy to production" icon="rocket" href="/operations/deployment">
+    Learn how to deploy OOOC Fête Finder to Vercel or other platforms.
+  </Card>
+  
+  <Card title="Set up Google Sheets" icon="table" href="/integrations/google-sheets">
+    Configure Google Sheets import for admin backup/preview.
+  </Card>
+  
+  <Card title="Configure geocoding" icon="map" href="/integrations/geocoding">
+    Enable precise event coordinates with Google Maps Geocoding API.
+  </Card>
+  
+  <Card title="Stripe webhooks" icon="credit-card" href="/integrations/stripe-webhooks">
+    Process partner payments with Stripe webhook integration.
+  </Card>
+</CardGroup>

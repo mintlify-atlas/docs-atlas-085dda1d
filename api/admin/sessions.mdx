@@ -1,0 +1,262 @@
+---
+title: Session management
+description: Manage admin authentication sessions
+---
+
+The session management endpoints allow you to list active admin sessions, revoke individual sessions, and revoke all sessions at once.
+
+## List active sessions
+
+Retrieve all active admin authentication sessions.
+
+<CodeGroup>
+```bash Request
+GET /api/admin/tokens/sessions
+```
+</CodeGroup>
+
+### Authentication
+
+<Warning>
+This endpoint requires admin authentication. Include one of the following:
+- `x-admin-key` header with your admin key
+- `Authorization: Bearer <token>` header with a valid admin session token
+- Valid admin session cookie
+</Warning>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Whether the request succeeded
+</ResponseField>
+
+<ResponseField name="count" type="number" required>
+  Number of active sessions
+</ResponseField>
+
+<ResponseField name="sessions" type="array" required>
+  Array of active session objects
+  
+  <ResponseField name="sessions[].jti" type="string">
+    JWT ID - unique identifier for the session
+  </ResponseField>
+  
+  <ResponseField name="sessions[].iat" type="number">
+    Issued at timestamp (Unix seconds)
+  </ResponseField>
+  
+  <ResponseField name="sessions[].exp" type="number">
+    Expiration timestamp (Unix seconds)
+  </ResponseField>
+  
+  <ResponseField name="sessions[].v" type="number">
+    Token version number
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="currentTokenVersion" type="number" required>
+  Current global token version (sessions with older versions are invalid)
+</ResponseField>
+
+<ResponseField name="now" type="number" required>
+  Current server timestamp (Unix seconds)
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "success": true,
+  "count": 2,
+  "sessions": [
+    {
+      "jti": "abc123def456",
+      "iat": 1740732000,
+      "exp": 1740818400,
+      "v": 1
+    },
+    {
+      "jti": "xyz789uvw012",
+      "iat": 1740735600,
+      "exp": 1740822000,
+      "v": 1
+    }
+  ],
+  "currentTokenVersion": 1,
+  "now": 1740736800
+}
+```
+
+### Error responses
+
+**401 Unauthorized**
+
+```json
+{
+  "success": false,
+  "error": "Unauthorized"
+}
+```
+
+**500 Internal Server Error**
+
+```json
+{
+  "success": false,
+  "error": "Failed to list sessions"
+}
+```
+
+## Revoke a specific session
+
+Revoke a single admin session by its JWT ID.
+
+<CodeGroup>
+```bash Request
+DELETE /api/admin/tokens/sessions/:jti
+```
+</CodeGroup>
+
+### Authentication
+
+<Warning>
+This endpoint requires admin authentication.
+</Warning>
+
+### Path parameters
+
+<ParamField path="jti" type="string" required>
+  The JWT ID of the session to revoke. URL encoding is handled automatically.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Whether the revocation succeeded
+</ResponseField>
+
+<ResponseField name="jti" type="string" required>
+  The JWT ID that was revoked
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "success": true,
+  "jti": "abc123def456"
+}
+```
+
+### Error responses
+
+**401 Unauthorized**
+
+```json
+{
+  "success": false,
+  "error": "Unauthorized"
+}
+```
+
+**404 Not Found**
+
+```json
+{
+  "success": false,
+  "error": "Session not found or invalid jti"
+}
+```
+
+## Revoke all sessions
+
+Revoke all active admin sessions by incrementing the global token version. This immediately invalidates all existing session tokens.
+
+<CodeGroup>
+```bash Request
+POST /api/admin/tokens/revoke
+```
+</CodeGroup>
+
+### Authentication
+
+<Warning>
+This endpoint requires admin authentication. After this request completes, your current session token will also be invalidated. You'll need to re-authenticate using your admin key.
+</Warning>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Whether the revocation succeeded
+</ResponseField>
+
+<ResponseField name="nextTokenVersion" type="number" required>
+  The new global token version (all previous versions are now invalid)
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp of the revocation
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "success": true,
+  "nextTokenVersion": 2,
+  "timestamp": "2026-02-28T10:30:00.000Z"
+}
+```
+
+### Error responses
+
+**401 Unauthorized**
+
+```json
+{
+  "success": false,
+  "error": "Unauthorized"
+}
+```
+
+**500 Internal Server Error**
+
+```json
+{
+  "success": false,
+  "error": "Failed to revoke sessions"
+}
+```
+
+## Use cases
+
+### Security incident response
+
+If you suspect an admin session has been compromised, use the revoke all sessions endpoint to immediately invalidate all tokens:
+
+```bash
+curl -X POST https://your-domain.com/api/admin/tokens/revoke \
+  -H "x-admin-key: your-admin-key"
+```
+
+### Session cleanup
+
+List active sessions to identify and revoke specific old or suspicious sessions:
+
+```bash
+# List sessions
+curl https://your-domain.com/api/admin/tokens/sessions \
+  -H "x-admin-key: your-admin-key"
+
+# Revoke a specific session
+curl -X DELETE https://your-domain.com/api/admin/tokens/sessions/abc123def456 \
+  -H "x-admin-key: your-admin-key"
+```
+
+### Logout from other devices
+
+Revoke all sessions except the current one by calling the revoke all endpoint, then immediately re-authenticating to create a new session.
+
+<Note>
+Sessions are stored in the same data store as your event data (Postgres or Vercel KV). The session list endpoint returns sessions sorted by creation time, with newest sessions first.
+</Note>
