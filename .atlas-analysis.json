@@ -1,0 +1,150 @@
+{
+  "projectType": "saas",
+  "projectName": "OOOC Fête Finder",
+  "projectDescription": "A Next.js web app for discovering and managing Fête de la Musique events in Paris with admin workflows, event submissions, and analytics.",
+  "theme": "almond",
+  "primaryColor": "#FF6B6B",
+  "lightColor": "#FFE5E5",
+  "darkColor": "#CC5555",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "environment-setup"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/data-flow",
+              "architecture/event-identity",
+              "architecture/engagement-tracking"
+            ]
+          },
+          {
+            "group": "Admin Guide",
+            "pages": [
+              "admin/workflow",
+              "admin/content-management",
+              "admin/featured-events",
+              "admin/submissions-moderation",
+              "admin/analytics"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/deployment",
+              "operations/postgres-setup",
+              "operations/serverless-hardening",
+              "operations/logging",
+              "operations/backup-recovery"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/google-sheets",
+              "integrations/geocoding",
+              "integrations/stripe-webhooks"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/rate-limiting",
+              "security/abuse-protection",
+              "security/auth-model"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Public APIs",
+            "pages": [
+              "api/auth",
+              "api/event-submissions",
+              "api/tracking",
+              "api/partner-stats"
+            ]
+          },
+          {
+            "group": "Admin APIs",
+            "pages": [
+              "api/admin/health",
+              "api/admin/data-store",
+              "api/admin/sessions"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/revalidation",
+              "api/webhooks",
+              "api/cron-jobs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/environment-variables",
+              "reference/data-modes",
+              "reference/caching-policy"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "reference/scripts",
+              "reference/testing",
+              "reference/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Interactive event discovery with search, filters, and map view",
+    "Admin console for content management and analytics",
+    "Event submission workflow with moderation",
+    "Featured and promoted event scheduling",
+    "Engagement tracking and social proof (calendar syncs)",
+    "Partner activation queue with Stripe integration",
+    "Postgres-backed data store with CSV fallback",
+    "Rate-limited auth and submission endpoints",
+    "PWA support with offline caching"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/verify",
+    "GET /api/auth/session",
+    "POST /api/event-submissions",
+    "POST /api/track",
+    "POST /api/track/discovery",
+    "POST /api/user/preference",
+    "GET /api/partner-stats/[activationId]",
+    "GET /api/og",
+    "GET /api/admin/health",
+    "GET /api/admin/data-store/status",
+    "POST /api/revalidate/deploy",
+    "POST /api/webhooks/stripe",
+    "GET /api/cron/cleanup-admin-sessions",
+    "GET /api/cron/cleanup-rate-limits",
+    "GET /api/cron/backup-event-store"
+  ]
+}
